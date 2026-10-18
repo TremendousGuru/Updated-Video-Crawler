@@ -216,6 +216,15 @@ async def compose_lead(lead_id: int):
         db.update_lead(lead_id, status="composing")
         pipeline.bus_publish(run_id, {"type": "update", "id": lead_id, "status": "composing"})
         out = await composer.compose(facts, settings, store_hint=facts.get("store_name") or "there")
+        if out.get("manual_review_required"):
+            note = (out.get("fallback_reason") or "Evidence is insufficient for an individualized outreach draft.")[:300]
+            db.update_lead(lead_id, status="crawled", engine="manual-review", notes=note, error="")
+            pipeline.bus_publish(run_id, {
+                "type": "update", "id": lead_id, "status": "crawled", "done": True,
+                "manual_review_required": True, "error": note,
+            })
+            pipeline.bus_publish(run_id, {"type": "done"})
+            return
         subs = out.get("subjects") or [composer.local_subject_for(facts, settings)]
         db.update_lead(lead_id, status="ready", subjects=subs, subject=subs[0], body=out.get("body", ""),
                        engine=out.get("engine", ""), notes=(out.get("hook") or "")[:300], error="")

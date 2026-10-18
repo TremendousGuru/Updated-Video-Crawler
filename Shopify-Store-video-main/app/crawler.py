@@ -388,7 +388,7 @@ class Fetcher:
 
 # ----------------------------------------------------------------- extraction
 
-def extract_products(payload: list[dict], max_products: int = 25) -> list[dict]:
+def extract_products(payload: list[dict], max_products: int = 25, store_url: str = "") -> list[dict]:
     out = []
     for p in payload or []:
         title = clean_text(p.get("title"))
@@ -400,6 +400,37 @@ def extract_products(payload: list[dict], max_products: int = 25) -> list[dict]:
             if price:
                 break
         tags = [clean_text(t).lower() for t in (p.get("tags") or []) if clean_text(t)]
+        body_html = p.get("body_html") or ""
+        body_soup = soupify(body_html)
+        description = clean_text(body_soup.get_text(" "))[:2400]
+        variants = []
+        for variant in (p.get("variants") or [])[:12]:
+            options = [clean_text(v) for v in (variant.get("options") or []) if clean_text(v)]
+            variants.append({
+                "title": clean_text(variant.get("title")),
+                "options": options,
+                "available": variant.get("available"),
+                "price": clean_text(variant.get("price")),
+            })
+        images = [
+            clean_text(image.get("src"))
+            for image in (p.get("images") or [])[:12]
+            if isinstance(image, dict) and image.get("src")
+        ]
+        video_assets = []
+        for media in p.get("media") or []:
+            if not isinstance(media, dict):
+                continue
+            media_type = clean_text(media.get("media_type") or media.get("type"))
+            if media_type in {"video", "external_video", "model_3d"}:
+                video_assets.append({
+                    "type": media_type,
+                    "url": clean_text(media.get("sources", [{}])[0].get("url") if media.get("sources") else media.get("embedded_url") or media.get("src")),
+                })
+        for video in body_soup.find_all(["video", "iframe"]):
+            video_url = clean_text(video.get("src") or (video.find("source") or {}).get("src"))
+            video_assets.append({"type": "embedded_video", "url": video_url})
+        handle = clean_text(p.get("handle"))
         out.append({
             "title": title,
             "price": price,
@@ -407,6 +438,12 @@ def extract_products(payload: list[dict], max_products: int = 25) -> list[dict]:
             "vendor": clean_text(p.get("vendor")),
             "tags": tags[:6],
             "image": bool((p.get("images") or [])),
+            "image_urls": images,
+            "description": description,
+            "url": f"{store_url.rstrip('/')}/products/{handle}" if store_url and handle else "",
+            "variants": variants,
+            "video_assets": video_assets,
+            "video_evidence": "present" if video_assets else "unknown",
         })
     # Prefer stuff that actually looks like a hero product: priced, imaged, informative title.
     out.sort(key=lambda x: (x["image"], bool(x["price"]), len(x["title"])))
@@ -597,7 +634,7 @@ async def crawl_store(fetcher: Fetcher, lead: dict, settings: dict) -> dict:
     if shopify:
         payload, pstatus = await fetcher.get_json(f"{origin}/products.json?limit=100")
         if isinstance(payload, dict):
-            products = extract_products(payload.get("products") or [], max_products)
+            products = extract_products(payload.get("products") or [], max_products, origin)
             result["pages"].append({
                 "label": "products.json", "url": f"{origin}/products.json",
                 "status": 200, "note": f"{len(products)} products",

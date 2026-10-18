@@ -112,6 +112,14 @@ async def _process_one(lead_id: int, fetcher: crawler.Fetcher, settings: dict, r
 
     store_hint = facts.get("store_name") or lead.get("store_name") or "there"
     out = await composer.compose(facts, settings, store_hint=store_hint)
+    if out.get("manual_review_required"):
+        note = (out.get("fallback_reason") or "Evidence is insufficient for an individualized outreach draft.")[:300]
+        db.update_lead(lead_id, status="crawled", stage="", engine="manual-review", notes=note)
+        bus_publish(run_id, {
+            "type": "update", "id": lead_id, "status": "crawled", "done": True,
+            "manual_review_required": True, "error": note,
+        })
+        return {"id": lead_id, "status": "crawled", "manual_review_required": True}
     subjects = out.get("subjects") or [composer.local_subject_for(facts, settings)]
     body = out.get("body") or ""
 
@@ -174,7 +182,7 @@ async def run_batch(run_id: str, ids: list[int], settings: dict) -> None:
                     res = {"id": lid, "status": "failed"}
                 run.done_ids.add(lid)
                 run.counts["ok" if res["status"] != "failed" else "failed"] += 1
-                if res["status"] in ("ready", "crawled"):
+                if res["status"] == "ready":
                     run.counts["ready"] += 1
                 bus_publish(run_id, {"type": "progress", **run.snapshot()})
                 await asyncio.sleep(0.05)
