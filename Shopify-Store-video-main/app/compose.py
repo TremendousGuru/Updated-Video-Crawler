@@ -566,13 +566,21 @@ def build_store_profile(facts: dict) -> dict:
         "location": location,
         "has_product_data": bool(products),
         "has_about_page": bool((f.get("about_snippet") or "").strip()),
-        "has_video_evidence": bool(f.get("video_assets") or f.get("socials") or f.get("video_embeds")),
+        "has_video_evidence": bool(
+            f.get("video_assets")
+            or f.get("video_embeds")
+            or any(product.get("video_assets") or product.get("videos") for product in products)
+        ),
+        "has_social_content_audit": bool(f.get("social_content_audit")),
     }
     return profile
 
 
 def _known_video_assets(product: dict, facts: dict) -> list[dict]:
     assets = product.get("video_assets") or product.get("videos") or []
+    audit = product.get("presentation_audit") or {}
+    if not assets and isinstance(audit, dict) and audit.get("video_detected"):
+        return [{"type": "video detected on fetched product page"}]
     if isinstance(assets, bool):
         return [{"type": "video"}] if assets else []
     if isinstance(assets, str):
@@ -588,7 +596,13 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     source_url = str(product.get("url") or facts.get("url") or profile.get("store_url") or "")
     assets = _known_video_assets(product, facts)
 
-    if not title or assets:
+    video_audit = product.get("video_audit") or {}
+    distinct_video_angle = (
+        str(video_audit.get("distinct_opportunity") or "").strip()
+        if isinstance(video_audit, dict) else ""
+    )
+    audited_video_gap = bool(distinct_video_angle)
+    if not title or (assets and not audited_video_gap):
         limitations = []
         observations = []
         if assets:
@@ -621,11 +635,51 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     if description:
         evidence.append({"fact": description[:600], "source_url": source_url, "evidence_type": "observed"})
 
+    presentation_audit = product.get("presentation_audit") or {}
+    checked_without_video = (
+        isinstance(presentation_audit, dict)
+        and presentation_audit.get("page_checked")
+        and presentation_audit.get("video_detected") is False
+    )
+    if checked_without_video:
+        evidence.append({
+            "fact": "No video element was detected in the fetched product page HTML; this is not proof of a customer or sales problem.",
+            "source_url": str(presentation_audit.get("source_url") or source_url),
+            "evidence_type": "observed",
+            "confidence": 0.9,
+        })
+
+    if re.search(
+        r"\b(shown|presented|demonstrated|explained|answers?)\b.{0,55}\b(scale|fit|size|use|installation|material)\b",
+        description,
+        re.I,
+    ):
+        return {
+            "product": product,
+            "primary_opportunity": "",
+            "observations": [{
+                "finding": "The extracted product copy says a key product question is already shown or explained.",
+                "source_url": source_url,
+                "evidence_type": "observed",
+                "confidence": 0.72,
+            }],
+            "reason_video_may_help": "",
+            "limitations": ["The available product copy indicates this detail is already presented; no distinct unmet need is established."],
+            "confidence": 0.0,
+            "recommended_format": "",
+            "concept": "",
+            "evidence": evidence,
+            "source_url": source_url,
+            "score": 0,
+            "score_breakdown": {},
+        }
+
     practical_patterns = (
-        (r"\bclamp\w*\b", "product demonstration", "Show the clamp attaching to the shelf or desk edge, then angle the arm over the workspace."),
-        (r"\b(install|installation|mount|assemble|assembly|setup|set up)\w*\b", "installation demonstration", "Show the setup step by step, using only the installation details stated in the product description."),
-        (r"\b(apply|application|wear|fit|adjust|fold|pour|connect|attach|operate|use)\w*\b", "product demonstration", f"Show how {title} is used in the way described on its product page."),
-        (r"\b(locking lid|leakproof|waterproof|insulated|adjustable)\b", "product feature demonstration", "Use close-ups to show the named feature being handled, without adding performance claims."),
+        (r"\bclamp\w*\b", "product demonstration", "Show the clamp attaching to the shelf or desk edge, then angle the arm over the workspace.", "product_education"),
+        (r"\b(install|installation|mount|assemble|assembly|setup|set up)\w*\b", "installation demonstration", "Show the setup step by step, using only the installation details stated in the product description.", "product_education"),
+        (r"\b(compatib|care instruction|maintenance|cleaning|ingredient|sizing|size chart|variant|how to)\w*\b", "FAQ or objection-handling video", f"Answer a concise question about {title} using only the details stated on its product page.", "purchase_confidence"),
+        (r"\b(apply|application|wear|fit|adjust|fold|pour|connect|attach|operate|use)\b", "product demonstration", f"Show how {title} is used in the way described on its product page.", "product_education"),
+        (r"\b(locking lid|leakproof|waterproof|insulated|adjustable|even[- ]heating|copper core|ergonomic)\b", "product benefit explainer", f"Use a close-up to show the stated feature of {title}, then explain only the practical benefit named in its description.", "benefit_communication"),
     )
     format_name = ""
     concept = ""
@@ -633,12 +687,119 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     reason = ""
     confidence = 0.0
     evidence_strength = 0
+    opportunity_category = ""
 
-    for pattern, candidate_format, candidate_concept in practical_patterns:
+    if assets and audited_video_gap:
+        format_name = str(video_audit.get("recommended_format") or "distinct short-form video angle")
+        concept = distinct_video_angle
+        opportunity_category = "existing_video_fresh_angle"
+        opportunity = "A supplied video audit identifies a distinct angle beyond the listed video"
+        reason = "The supplied audit identifies a specific alternative to the existing product video; review the source footage before production."
+        confidence = _as_float(video_audit.get("confidence"), 0.72)
+        evidence_strength = 3
+        evidence.append({
+            "fact": str(video_audit.get("finding") or distinct_video_angle),
+            "source_url": str(video_audit.get("source_url") or source_url),
+            "evidence_type": "inferred",
+            "confidence": confidence,
+        })
+
+    social_audit = facts.get("social_content_audit") or product.get("social_content_audit") or {}
+    if not concept and isinstance(social_audit, dict):
+        posts_reviewed = max(0, int(_as_float(social_audit.get("posts_reviewed"))))
+        video_posts = max(0, int(_as_float(social_audit.get("video_posts"))))
+        social_source = str(social_audit.get("source_url") or "")
+        if social_audit.get("active") is True and posts_reviewed > 0 and video_posts == 0 and social_source:
+            detail = description or title
+            format_name = "short-form social video"
+            concept = f"Build a short vertical video around {title}, showing {detail.rstrip('.')}."
+            opportunity_category = "social_content_variety"
+            opportunity = "The supplied social audit found no video in the reviewed recent posts"
+            reason = (
+                f"The supplied audit records {posts_reviewed} recent posts and no video posts. "
+                "A product-focused clip is a possible content-format variation, not evidence of a sales problem."
+            )
+            confidence = 0.85
+            evidence_strength = 3
+            evidence.append({
+                "fact": f"{posts_reviewed} recent social posts reviewed; {video_posts} video posts recorded.",
+                "source_url": social_source,
+                "evidence_type": "observed",
+                "confidence": confidence,
+            })
+
+    positioning = str(profile.get("brand_positioning") or "").lower()
+    if not concept and description and re.search(r"\b(premium|luxury|luxurious)\b", positioning):
+        detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
+        format_name = "premium product showcase"
+        concept = f"Use close-ups to present {title} and the stated detail “{detail}”, without adding unsupported quality claims."
+        opportunity_category = "premium_product_presentation"
+        opportunity = "The stated premium positioning could be paired with a more detailed product showcase"
+        reason = "The store positioning explicitly uses premium language, and the product page supplies a concrete detail that can be shown."
+        confidence = 0.75
+        evidence_strength = 2
+
+    about_snippet = str(facts.get("about_snippet") or "").strip()
+    founder_name = str(facts.get("founder_name") or "").strip()
+    if not concept and about_snippet and founder_name:
+        story_detail = re.split(r"(?<=[.!?])\s+", about_snippet)[0].rstrip(".")
+        story_words = story_detail.split()
+        if len(story_words) > 16:
+            story_detail = " ".join(story_words[:16]).rstrip(" ,;:") + "..."
+        format_name = "founder or brand-story video"
+        concept = (
+            f"Pair a short brand-story line grounded in the About page with a close-up of {title}; "
+            f"the verified story names {founder_name} and says “{story_detail}”."
+        )
+        opportunity_category = "brand_story_or_craftsmanship"
+        opportunity = "A verified founder story could give a product video a more distinctive brand context"
+        reason = "The About page includes a named founder and a store-specific story detail that can be referenced without making competitor or sales claims."
+        confidence = 0.78
+        evidence_strength = 3
+        evidence.append({
+            "fact": f"{founder_name}: {story_detail[:500]}",
+            "source_url": str(facts.get("about_url") or facts.get("url") or source_url),
+            "evidence_type": "observed",
+            "confidence": confidence,
+        })
+
+    faq_questions = product.get("faq_questions") or product.get("customer_questions") or []
+    if not concept and isinstance(faq_questions, list) and faq_questions:
+        question = str(faq_questions[0]).strip()
+        if question:
+            format_name = "FAQ or objection-handling video"
+            concept = f"Open with the verified question “{question}”, then answer it using only the product-page details."
+            opportunity_category = "purchase_confidence"
+            opportunity = "A supplied customer question could anchor a focused product explainer"
+            reason = "The supplied question is direct evidence of an information need; the answer must stay within the product-page facts."
+            confidence = 0.9
+            evidence_strength = 3
+            evidence.append({
+                "fact": question,
+                "source_url": source_url,
+                "evidence_type": "observed",
+                "confidence": confidence,
+            })
+
+    if not concept:
+        scale_pattern = r"\b(scale|fit|sizing|dimensions?|size chart|texture|material|real[- ]world appearance)\b"
+        if re.search(scale_pattern, lower):
+            format_name = "real-world product showcase"
+            concept = f"Show {title} in an ordinary-use setting, using only the size, fit, or material details stated on its page."
+            opportunity_category = "real_world_appearance"
+            opportunity = "A real-world showcase could make a stated product detail easier to see"
+            reason = "The extracted product details identify size, fit, or material information that can be shown visually; no customer difficulty is assumed."
+            confidence = 0.76
+            evidence_strength = 3 if description else 1
+
+    for pattern, candidate_format, candidate_concept, category in practical_patterns:
+        if concept:
+            break
         if re.search(pattern, lower):
             format_name = candidate_format
             concept = candidate_concept
-            opportunity = "A product-use or feature demonstration is a relevant creative opportunity"
+            opportunity_category = category
+            opportunity = f"{candidate_format.capitalize()} is a relevant creative opportunity"
             reason = "The extracted product details name a specific action or feature that can be shown directly in a short video. This is a creative opportunity, not evidence of a sales or customer problem."
             confidence = 0.82 if description else 0.58
             evidence_strength = 3 if description else 1
@@ -657,6 +818,7 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
             if cue in lower:
                 format_name = "lifestyle video"
                 concept = candidate_concept
+                opportunity_category = "lifestyle_or_use_case"
                 opportunity = "A product-specific lifestyle or use-case story is a relevant creative opportunity"
                 reason = f"The extracted product information explicitly references {cue}; a short scene can make that context tangible without claiming customer outcomes."
                 confidence = 0.78
@@ -666,10 +828,30 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     if not concept and re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", lower):
         format_name = "lifestyle styling video"
         concept = f"Build a simple outfit or carry look around {title}, keeping the product as the visual focus."
+        opportunity_category = "real_world_appearance"
         opportunity = "A product-specific styling concept is a relevant creative opportunity"
         reason = "The product title or category identifies a wearable/accessory item that can be shown in a styling context. This is a proposed creative angle, not a claim that the current presentation is inadequate."
         confidence = 0.66
         evidence_strength = 2 if product_type or tags else 1
+
+    if not concept and re.search(
+        r"\b(handmade|handcrafted|small[- ]batch|made to order|artisan|craftsmanship)\b",
+        " ".join([description, " ".join(tags), " ".join(profile.get("signals") or [])]),
+        re.I,
+    ):
+        craft_signal = next(
+            (signal for signal in profile.get("signals") or []
+             if re.search(r"\b(handmade|handcrafted|small[- ]batch|made to order|artisan|craftsmanship)\b", signal, re.I)),
+            "",
+        )
+        if craft_signal:
+            format_name = "craftsmanship or behind-the-scenes video"
+            concept = f"Show close-ups of {title} alongside a maker-led scene that reflects the store's {craft_signal} approach."
+            opportunity_category = "brand_story_or_craftsmanship"
+            opportunity = "A verified brand or making detail could anchor a behind-the-scenes video"
+            reason = "The extracted store signals identify a specific brand detail that could be shown visually. The production process itself should be confirmed before filming."
+            confidence = 0.72
+            evidence_strength = 2
 
     if not concept and description and len(description.split()) >= 8:
         # A useful creative idea still needs an identifiable attribute/use case to build on.
@@ -678,6 +860,7 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
         if detail:
             format_name = "product detail video"
             concept = f"Use a close-up product story to bring this page detail to life: {detail}"
+            opportunity_category = "product_detail_or_benefit"
             opportunity = "A product-specific detail can anchor a focused video concept"
             reason = "The product description includes a concrete detail that can be translated into visuals; no customer difficulty is inferred."
             confidence = 0.62
@@ -699,12 +882,30 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
             "score_breakdown": {},
         }
 
+    observed_fact = next(
+        (item["fact"] for item in reversed(evidence) if item.get("evidence_type") == "observed"),
+        title,
+    )
     observations = [{
-        "finding": evidence[-1]["fact"] if description else f"The extracted product title/category identifies {title} as {product_type or 'a specific product'}.",
+        "finding": observed_fact,
         "source_url": source_url,
         "evidence_type": "observed",
         "confidence": confidence,
     }]
+    if checked_without_video:
+        observations.append({
+            "finding": "No video element was detected in the fetched product page HTML; this alone does not establish a customer problem.",
+            "source_url": str(presentation_audit.get("source_url") or source_url),
+            "evidence_type": "observed",
+            "confidence": 0.9,
+        })
+    if assets and audited_video_gap:
+        observations.append({
+            "finding": str(video_audit.get("finding") or distinct_video_angle),
+            "source_url": str(video_audit.get("source_url") or source_url),
+            "evidence_type": "inferred",
+            "confidence": confidence,
+        })
     presentation_note = product.get("presentation_observation")
     if presentation_note:
         observations.insert(0, {
@@ -714,7 +915,18 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
             "confidence": 0.9,
         })
 
-    score = score_product_candidate(product, profile, {"primary_opportunity": opportunity}, _plan=False)
+    evidence.append({
+        "fact": opportunity,
+        "source_url": source_url,
+        "evidence_type": "inferred",
+        "confidence": confidence,
+    })
+    score = score_product_candidate(
+        product,
+        profile,
+        {"primary_opportunity": opportunity, "opportunity_category": opportunity_category},
+        _plan=False,
+    )
     if not description:
         score["score"] = min(score["score"], 7)
     return {
@@ -725,6 +937,7 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
         "limitations": ["No claim is made about customer behavior, conversion, or a proven weakness in the current product page."],
         "confidence": confidence,
         "recommended_format": format_name,
+        "opportunity_category": opportunity_category,
         "concept": concept,
         "evidence": evidence,
         "source_url": source_url,
@@ -748,6 +961,7 @@ def diagnose_video_opportunity(facts: dict, store_profile: dict | None = None, p
         ]
         return {
             "primary_opportunity": "",
+            "opportunity_category": "",
             "observations": ([{
                 "finding": "Existing product video content is present; a duplicate concept is not recommended without a distinct unmet need.",
                 "source_url": (f.get("products") or [{}])[0].get("url") or f.get("url", ""),
@@ -760,32 +974,83 @@ def diagnose_video_opportunity(facts: dict, store_profile: dict | None = None, p
             "recommended_format": "",
             "concept": "",
             "evidence": [],
+            "score": 0,
+            "score_breakdown": {},
         }
     selected = max(plans, key=lambda plan: plan.get("score", 0))
     return {key: selected[key] for key in (
         "primary_opportunity", "observations", "reason_video_may_help", "limitations",
-        "confidence", "recommended_format", "concept", "evidence", "source_url",
+        "confidence", "recommended_format", "opportunity_category", "concept", "evidence", "source_url",
+        "score", "score_breakdown",
     )}
 
 
 def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan: bool = True) -> dict:
-    """Score evidence, video fit, visual potential, brand fit, and known content gaps (0-10)."""
+    """Score a specific, evidence-grounded video opportunity on the 0-10 prospect rubric."""
     p = product or {}
     title = str(p.get("title") or "").strip()
     description = str(p.get("description") or "").strip()
+    video_audit = p.get("video_audit") or {}
     if not title:
         return {"score": 0, "score_breakdown": {}}
-    if _known_video_assets(p, {}):
+    if _known_video_assets(p, {}) and not (
+        isinstance(video_audit, dict) and isinstance(video_audit.get("distinct_opportunity"), str)
+        and video_audit.get("distinct_opportunity").strip()
+    ):
         return {"score": 0, "score_breakdown": {}}
 
-    evidence = min(3, (1 if title else 0) + (1 if p.get("type") or p.get("tags") else 0) + (1 if description else 0))
-    video_fit = 3 if diagnosis.get("primary_opportunity") and description else (2 if diagnosis.get("primary_opportunity") else 0)
+    specific_detail = bool(description and len(description.split()) >= 8)
+    presentation_audit = p.get("presentation_audit") or {}
+    checked_without_video = (
+        isinstance(presentation_audit, dict)
+        and presentation_audit.get("page_checked")
+        and presentation_audit.get("video_detected") is False
+    )
+    category = diagnosis.get("opportunity_category") or ""
+    evidence = (
+        3 if (
+            p.get("presentation_observation")
+            or p.get("presentation_gap")
+            or (isinstance(video_audit, dict) and isinstance(video_audit.get("distinct_opportunity"), str)
+                and video_audit.get("distinct_opportunity").strip())
+        )
+        else 2 if checked_without_video and specific_detail and category
+        else 1 if specific_detail
+        else 1 if title and (p.get("type") or p.get("tags"))
+        else 0
+    )
+    video_fit = 3 if category in {
+        "product_education", "purchase_confidence", "benefit_communication", "lifestyle_or_use_case",
+        "brand_story_or_craftsmanship", "existing_video_fresh_angle", "social_content_variety",
+        "premium_product_presentation",
+    } and specific_detail else (
+        2 if diagnosis.get("primary_opportunity") else 0
+    )
     visual = 2 if (
-        re.search(r"\b(show|use|wear|fit|clamp|install|apply|adjust|pour|assemble|routine|hiking|travel)\b", f"{title} {description} {p.get('type', '')}", re.I)
+        category == "premium_product_presentation" and p.get("image") and specific_detail
+        or
+        re.search(r"\b(show|use|wear|fit|clamp|install|apply|adjust|pour|assemble|routine|hiking|travel|heating|copper|core|walnut|scent|handmade|craftsmanship|small[- ]batch)\b", f"{title} {description} {p.get('type', '')}", re.I)
         or re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", title, re.I)
     ) else (1 if p.get("type") else 0)
-    brand_fit = 1 if p.get("type") and p.get("type", "").lower() in [v.lower() for v in profile.get("main_product_categories", [])] else 0
-    content_gap = 1 if p.get("presentation_observation") else 0
+    known_categories = [str(v).lower() for v in profile.get("main_product_categories", [])]
+    inferred_category = str(p.get("type") or "").lower()
+    if not inferred_category:
+        inferred_category = next(
+            (term for term in ("hat", "cap", "shirt", "hoodie", "jacket", "dress", "bag", "backpack", "shoe", "sneaker")
+             if re.search(rf"\b{term}\b", title, re.I)),
+            "",
+        )
+    brand_fit = 1 if inferred_category and (
+        not known_categories
+        or "general product line" in known_categories
+        or any(inferred_category in value or value in inferred_category for value in known_categories)
+    ) else 0
+    video_audit = p.get("video_audit") or {}
+    content_gap = 1 if category == "social_content_variety" or (
+        isinstance(video_audit, dict)
+        and isinstance(video_audit.get("distinct_opportunity"), str)
+        and video_audit.get("distinct_opportunity").strip()
+    ) else 0
     total = min(10, evidence + video_fit + visual + brand_fit + content_gap)
     return {
         "score": total,
@@ -807,14 +1072,25 @@ def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> d
         if plan.get("primary_opportunity"):
             ranked.append({"product": product, "plan": plan})
     ranked.sort(key=lambda item: item["plan"].get("score", 0), reverse=True)
-    if not ranked or ranked[0]["plan"].get("score", 0) < 5:
+    top_score = ranked[0]["plan"].get("score", 0) if ranked else 0
+    if not ranked or top_score < 8:
+        selection_status = "manual_review" if top_score >= 5 else "deprioritized"
+        selection_reason = (
+            f"The strongest candidate scored {top_score}/10 and needs evidence review before outreach."
+            if selection_status == "manual_review"
+            else f"The strongest candidate scored {top_score}/10 and is below the prioritization threshold."
+        )
         return {
             "product_name": "",
             "product_url": "",
-            "selection_reason": "The available evidence is not strong enough for a confident product recommendation.",
-            "score": ranked[0]["plan"].get("score", 0) if ranked else 0,
+            "selection_reason": selection_reason,
+            "score": top_score,
             "score_breakdown": ranked[0]["plan"].get("score_breakdown", {}) if ranked else {},
-            "alternative_candidates": [],
+            "selection_status": selection_status if ranked else "no_candidate",
+            "alternative_candidates": [
+                {"product_name": str(item["product"].get("title") or ""), "score": item["plan"].get("score", 0)}
+                for item in ranked[:3]
+            ],
         }
     primary = ranked[0]
     product = primary["product"]
@@ -824,6 +1100,7 @@ def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> d
         "selection_reason": "Selected because its extracted details support a specific, visually communicable concept.",
         "score": primary["plan"].get("score", 0),
         "score_breakdown": primary["plan"].get("score_breakdown", {}),
+        "selection_status": "strong_candidate",
         "alternative_candidates": [
             {"product_name": str(item["product"].get("title") or ""), "score": item["plan"].get("score", 0)}
             for item in ranked[1:3]
@@ -837,11 +1114,19 @@ def build_video_brief(facts: dict, store_profile: dict, diagnosis: dict, product
         return {"format": "", "objective": "", "duration_seconds": 0, "hook": "", "concept": "", "scenes": [], "key_benefit": "", "cta": "", "restrictions": []}
     concept = diagnosis.get("concept") or ""
     source_url = str(product.get("url") or facts.get("url") or "")
+    description = re.sub(r"\s+", " ", str(product.get("description") or "")).strip()
+    detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
+    detail_words = detail.split()
+    if len(detail_words) > 14:
+        detail = " ".join(detail_words[:14]).rstrip(" ,;:") + "..."
     scenes = [
-        "Open on the product and the setting or detail named in the source information.",
-        concept,
-        "Close on the product with a simple brand end frame; do not add unsourced claims.",
+        f"0–3s: Open on {product_name} with the verified detail or use case that anchors the concept.",
+        f"3–15s: {concept}",
+        "15–20s: Close on the product and a simple “Explore the product” end frame.",
     ]
+    restrictions = ["Do not imply customer outcomes or add product claims absent from the extracted source."]
+    if product.get("image_urls"):
+        restrictions.append("Use the extracted product images as visual references and keep the product appearance consistent.")
     return {
         "format": diagnosis.get("recommended_format") or "",
         "objective": "Translate one extracted product detail or use case into a concise visual story.",
@@ -849,10 +1134,17 @@ def build_video_brief(facts: dict, store_profile: dict, diagnosis: dict, product
         "hook": concept,
         "concept": concept,
         "scenes": scenes,
-        "key_benefit": "Make the specific product detail or use case easy to see.",
+        "key_benefit": "Make the verified product detail or use case easier to see and understand.",
         "cta": "Explore the product.",
-        "restrictions": ["Do not imply customer outcomes or add product claims absent from the extracted source."],
+        "on_screen_text": [text for text in (product_name, detail) if text],
+        "voice_over_suggestion": (
+            f"Optional voice-over: “{detail}.”" if detail else ""
+        ),
+        "restrictions": restrictions,
         "evidence": diagnosis.get("evidence") or [],
+        "opportunity_category": diagnosis.get("opportunity_category") or "",
+        "intended_audience": store_profile.get("target_audience") or "",
+        "why_this_fits": diagnosis.get("reason_video_may_help") or "",
         "source_url": source_url,
         "brand_and_product": {"brand_name": store_profile.get("brand_name"), "product_name": product_name, "product_url": source_url},
     }
@@ -915,20 +1207,35 @@ def generate_outreach_message(facts: dict, store_profile: dict, diagnosis: dict,
     description = re.sub(r"\s+", " ", str(product.get("description") or "")).strip()
     product_type = str(product.get("type") or "").strip()
     if description:
-        lead = f"Your product page describes {title} as “{description.rstrip('.')}.”"
+        detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
+        words = detail.split()
+        if len(words) > 22:
+            detail = " ".join(words[:22]).rstrip(" ,;:") + "..."
+        lead = f"I saw {title} on your site. Its page says, “{detail}.”"
     elif re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", title, re.I):
         lead = f"I saw {title} on your site and had a styling idea."
     elif product_type:
-        lead = f"I saw {title} in your {product_type} category, which gave me a styling idea."
+        lead = f"I saw {title} in your {product_type} range."
     else:
-        lead = f"{title} gave me a specific creative direction."
+        lead = f"I saw {title} in your product listing."
 
     format_name = video_brief.get("format") or "short video"
     concept_line = concept[0].lower() + concept[1:] if concept else ""
+    offer = str(settings.get("offer") or (
+        "I create short, product-specific videos that show a product's use, details, or place in everyday life"
+    )).strip().rstrip(".!? ")
+    video_offer_line = str(settings.get("video_line") or (
+        "I can turn this idea into a short storyboard for you to review."
+    )).strip()
+    cta = str(settings.get("cta") or "").strip()
+    if not cta or cta.lower() == "want me to send it over?":
+        cta = "Would you be open to seeing a short storyboard?"
+    elif not cta.endswith(("?", ".", "!")):
+        cta += "?"
     message = (
         f"Hi {brand + ' team' if brand else 'there'},\n\n"
-        f"{lead} For a {format_name}, I’d {concept_line}\n\n"
-        f"Would you be open to seeing a short storyboard?"
+        f"{lead} That gave me an idea for a {format_name}: I’d {concept_line}\n\n"
+        f"{offer}. {video_offer_line} {cta}"
     )
     sender = str(settings.get("sender_name") or "").strip()
     company = str(settings.get("sender_company") or "").strip()
@@ -937,12 +1244,15 @@ def generate_outreach_message(facts: dict, store_profile: dict, diagnosis: dict,
     optout = str(settings.get("optout_line") or "").strip()
     if settings.get("optout", False) and optout:
         message += f"\n\n{optout}"
-    subject = f"a video idea for {title}"
+    subject_idea = str(settings.get("subject_hint") or "a short video idea for {product}").strip()
+    subject = subject_idea.replace("{product}", title).strip()
+    if not subject:
+        subject = f"a short video idea for {title}"
     return {"subject": subject, "message": message}
 
 
 INTELLIGENCE_SYSTEM_PROMPT = """You write concise, warm, natural outreach about a specific short-video concept for an ecommerce product.
-Use only the supplied extracted facts, evidence, diagnosis and concept. Lead with a real product observation or a relevant creative idea, explain the visual concept in plain English, and connect it to a distinctive extracted feature, use case, audience or benefit. If an evidence-backed presentation problem is provided, explain how the concept could address it without asserting customer behavior. Never invent weaknesses, customer behavior, features, results, certifications, or performance claims. Do not use a generic service introduction, merely repeat the product name, or claim a video has already been made. If the evidence does not support an individualized message, return an empty message and require manual review. Keep it concise and conversational with one low-pressure CTA. Return JSON only with subject and message."""
+Use only the supplied extracted facts, evidence, diagnosis and concept. Lead with a real product observation, then explain one relevant video idea in plain English and how it makes an extracted feature, use case, audience or benefit easier to picture. Use the supplied service description, video-offer line, tone, subject idea and CTA naturally. Do not claim a storyboard or video already exists unless supplied facts explicitly confirm that. Do not make claims about competitor weakness, customer behavior, trust, conversion, sales or performance. Never invent product features, results, testimonials or certifications. Do not merely repeat the product name or use a generic service introduction. If the evidence does not support an individualized message, return an empty message and require manual review. Keep it concise and conversational. Return JSON only with subject and message."""
 
 
 def build_intelligent_outreach_prompt(facts: dict, profile: dict, diagnosis: dict, selection: dict, brief: dict, settings: dict) -> str:
@@ -956,7 +1266,13 @@ def build_intelligent_outreach_prompt(facts: dict, profile: dict, diagnosis: dic
         "evidence_to_reference": diagnosis.get("evidence") or [],
         "sender_name": settings.get("sender_name", ""),
         "sender_company": settings.get("sender_company", ""),
-        "cta_guidance": "Ask whether they would be open to seeing a short storyboard.",
+        "offer": settings.get("offer", ""),
+        "video_offer_line": settings.get("video_line", ""),
+        "tone": settings.get("tone", ""),
+        "subject_idea": settings.get("subject_hint", ""),
+        "cta": settings.get("cta", ""),
+        "message_guidance": "Open with the evidence-backed observation, connect it to one video concept, then explain the potential communication value without promising business results.",
+        "subject_guidance": "Follow the supplied subject idea and replace {product} with the exact selected product title.",
     }, ensure_ascii=True)
 
 
@@ -1019,7 +1335,10 @@ def compose_store_intelligence(facts: dict, settings: dict | None = None) -> dic
         "video_opportunity_found": bool(diagnosis.get("primary_opportunity")),
         "personalization_verified": outreach_quality["personalization_verified"],
         "manual_review_required": outreach_quality["manual_review_required"] or not evidence_sufficient,
-        "review_reasons": outreach_quality["review_reasons"] + (diagnosis.get("limitations") or [] if not evidence_sufficient or not diagnosis.get("primary_opportunity") else []),
+        "review_reasons": outreach_quality["review_reasons"] + (
+            [selection["selection_reason"]]
+            if selection.get("selection_status") in {"manual_review", "deprioritized"} else []
+        ) + (diagnosis.get("limitations") or [] if not evidence_sufficient or not diagnosis.get("primary_opportunity") else []),
         "outreach_checks": outreach_quality,
     }
     return {
@@ -1047,6 +1366,7 @@ async def compose(facts: dict, settings: dict, store_hint: str = "the store") ->
     if intelligence["quality_control"]["manual_review_required"]:
         return {
             "subjects": [], "body": "", "hook": "", "angle": "", "engine": "manual-review",
+            "writing_mode": "manual-review",
             "manual_review_required": True, "fallback_reason": "; ".join(intelligence["quality_control"]["review_reasons"][:3]),
             "intelligence": intelligence,
         }
@@ -1054,6 +1374,8 @@ async def compose(facts: dict, settings: dict, store_hint: str = "the store") ->
     product = next((p for p in (facts.get("products") or []) if p.get("title") == intelligence["product_selection"].get("product_name")), {})
     outreach = intelligence["outreach"]
     engine = "evidence-template"
+    writing_mode = "local-no-key"
+    fallback_reason = ""
     if settings.get("use_ai", True) and (settings.get("api_key") or "").strip():
         try:
             outreach = await compose_intelligent_ai(
@@ -1061,9 +1383,14 @@ async def compose(facts: dict, settings: dict, store_hint: str = "the store") ->
                 intelligence["product_selection"], intelligence["video_brief"],
             )
             engine = f"ai:{settings.get('model') or 'gpt-4o-mini'}"
-        except Exception as error:  # noqa: BLE001
-            intelligence["quality_control"]["review_reasons"].append(f"AI draft rejected; used evidence template: {str(error)[:120]}")
+            writing_mode = "ai"
+        except (httpx.HTTPError, RuntimeError, ValueError, KeyError, TypeError) as error:
+            fallback_reason = str(error)[:120]
+            intelligence["quality_control"]["review_reasons"].append(
+                f"AI draft rejected; used evidence template: {fallback_reason}"
+            )
             engine = "evidence-template"
+            writing_mode = "ai-fallback"
 
     quality = validate_outreach_personalization(outreach, facts, product, intelligence["video_brief"])
     if quality["manual_review_required"]:
@@ -1076,13 +1403,19 @@ async def compose(facts: dict, settings: dict, store_hint: str = "the store") ->
     intelligence["quality_control"]["personalization_verified"] = quality["personalization_verified"]
     intelligence["quality_control"]["manual_review_required"] = quality["manual_review_required"]
     if quality["manual_review_required"]:
-        return {"subjects": [], "body": "", "hook": "", "angle": "", "engine": "manual-review", "manual_review_required": True, "intelligence": intelligence}
+        return {
+            "subjects": [], "body": "", "hook": "", "angle": "", "engine": "manual-review",
+            "writing_mode": "manual-review", "fallback_reason": fallback_reason,
+            "manual_review_required": True, "intelligence": intelligence,
+        }
     return {
         "subjects": [outreach["subject"]] if outreach.get("subject") else [],
         "body": outreach.get("message", ""),
         "hook": intelligence["video_brief"].get("concept", "")[:160],
         "angle": intelligence["video_brief"].get("format", ""),
         "engine": engine,
+        "writing_mode": writing_mode,
+        "fallback_reason": fallback_reason,
         "manual_review_required": False,
         "intelligence": intelligence,
     }

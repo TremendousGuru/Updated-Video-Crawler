@@ -194,11 +194,31 @@ def save_settings_form(settings: dict) -> None:
     with st.sidebar.form("settings"):
         sender_name = st.text_input("Your name", value=settings.get("sender_name", ""))
         sender_company = st.text_input("Company", value=settings.get("sender_company", ""))
-        offer = st.text_input("What you do", value=settings.get("offer", ""))
-        video_line = st.text_input("Video offer line", value=settings.get("video_line", ""))
-        cta = st.text_input("Call to action", value=settings.get("cta", ""))
-        subject_hint = st.text_input("First subject idea", value=settings.get("subject_hint", ""))
-        tone = st.text_input("Tone", value=settings.get("tone", ""))
+        offer = st.text_input(
+            "What you do",
+            value=settings.get("offer", ""),
+            help="Describe your service plainly. The draft will connect it to one observed product opportunity.",
+        )
+        video_line = st.text_input(
+            "Video offer line",
+            value=settings.get("video_line", ""),
+            help="Describe a possible next step. Avoid suggesting a sample video has already been made.",
+        )
+        cta = st.text_input(
+            "Call to action",
+            value=settings.get("cta", ""),
+            help="Keep the invitation low-pressure and tied to the storyboard or concept.",
+        )
+        subject_hint = st.text_input(
+            "First subject idea",
+            value=settings.get("subject_hint", ""),
+            help="Use {product} to insert the selected product name into the subject.",
+        )
+        tone = st.text_input(
+            "Tone",
+            value=settings.get("tone", ""),
+            help="Guides both AI-written and local fallback drafts.",
+        )
         optout = st.checkbox("Include opt-out line", value=bool(settings.get("optout", True)))
         optout_line = st.text_input("Opt-out line", value=settings.get("optout_line", ""))
         st.divider()
@@ -213,12 +233,12 @@ def save_settings_form(settings: dict) -> None:
             "Look for missing email addresses", value=bool(settings.get("find_missing_emails", True))
         )
         auto_compose = st.checkbox("Write drafts after crawling", value=bool(settings.get("auto_compose", True)))
-        concurrency = st.slider("Stores at once", 1, 10, int(settings.get("concurrency", 4)))
+        concurrency = st.slider("Stores at once", 1, 10, int(settings.get("concurrency", 3)))
         request_delay = st.number_input(
             "Delay between requests (seconds)", min_value=0.0, max_value=10.0,
-            value=float(settings.get("request_delay", 0.5)), step=0.1,
+            value=float(settings.get("request_delay", 0.75)), step=0.1,
         )
-        max_pages = st.slider("Maximum pages per store", 1, 15, int(settings.get("max_pages", 5)))
+        max_pages = st.slider("Maximum pages per store", 1, 15, int(settings.get("max_pages", 10)))
         submitted = st.form_submit_button("Save settings", type="primary")
 
     if submitted:
@@ -244,7 +264,7 @@ def save_settings_form(settings: dict) -> None:
     elif active_api_key:
         st.sidebar.info("An API key is available from saved settings.")
     else:
-        st.sidebar.warning("No API key detected. The app will use built-in templates.")
+        st.sidebar.warning("Local mode: no API key detected. Evidence-based templates will be used; crawling still works.")
 
     if st.sidebar.button("Test API key", disabled=not active_api_key, key="test_api_key"):
         with st.sidebar.spinner("Testing the configured API key..."):
@@ -455,6 +475,14 @@ def show_lead(lead: dict, settings: dict) -> None:
         st.caption(" · ".join(lead["flags"]))
     if full.get("notes"):
         st.caption(f"Composition note: {full['notes']}")
+    engine = str(full.get("engine") or lead.get("engine") or "")
+    if engine == "evidence-template":
+        if "AI fallback:" in str(full.get("notes") or ""):
+            st.warning("The AI request failed. This draft was composed locally from the crawl evidence.")
+        else:
+            st.info("This draft was composed locally from crawl evidence; no AI API key was used.")
+    elif engine.startswith("ai:"):
+        st.caption(f"Composition engine: {engine}")
 
     subjects = full.get("subjects") or []
     selected_subject = st.selectbox(
@@ -535,10 +563,29 @@ def show_lead(lead: dict, settings: dict) -> None:
                 st.markdown("**Why video may help:** " + (intelligence["diagnosis"].get("reason_video_may_help") or "No clear reason yet."))
                 st.markdown("**Recommended format:** " + (intelligence["video_brief"].get("format") or "Not selected"))
                 st.markdown("**Selected product:** " + (intelligence["product_selection"].get("product_name") or "Not selected"))
-                st.markdown("**Score:** " + str(intelligence["product_selection"].get("score", 0)))
+                selection = intelligence.get("product_selection") or {}
+                st.markdown(
+                    f"**Prospect score:** {selection.get('score', 0)}/10 · "
+                    f"{(selection.get('selection_status') or 'needs review').replace('_', ' ')}"
+                )
+                if selection.get("score_breakdown"):
+                    st.caption("Score breakdown")
+                    st.json(selection["score_breakdown"])
+                if selection.get("alternative_candidates"):
+                    st.caption("Other candidates requiring review")
+                    st.json(selection["alternative_candidates"])
+                if intelligence["diagnosis"].get("confidence") is not None:
+                    st.caption(
+                        "Opportunity confidence: "
+                        + f"{intelligence['diagnosis'].get('confidence', 0):.0%}"
+                    )
                 if intelligence.get("outreach", {}).get("subject") or intelligence.get("outreach", {}).get("message"):
                     st.markdown("**Outreach subject:** " + (intelligence["outreach"].get("subject") or ""))
                     st.write(intelligence["outreach"].get("message") or "")
+                evidence = intelligence["diagnosis"].get("evidence") or []
+                if evidence:
+                    st.caption("Evidence and inference used")
+                    st.json(evidence)
                 if quality.get("manual_review_required"):
                     st.warning("Manual review recommended: " + "; ".join(quality.get("review_reasons") or ["evidence is weak"]))
             else:

@@ -250,6 +250,8 @@ def detect_shopify(html: str, meta: dict | None) -> bool:
 
 def page_label(kind: str, url: str) -> str:
     """Readable page names so the Sources tab shows *what* was read, not just 'policy page'."""
+    if kind == "product":
+        return "product page audit"
     u = url.lower()
     for frag, label in (
         ("privacy", "privacy policy"), ("terms", "terms of service"), ("refund", "refund policy"),
@@ -260,7 +262,7 @@ def page_label(kind: str, url: str) -> str:
         if frag in u:
             return label
     return {"about": "about page", "privacy": "privacy policy", "privacy_alt": "privacy policy",
-            "extras": "policy/contact page"}.get(kind, kind)
+            "extras": "policy/contact page", "product": "product page audit"}.get(kind, kind)
 
 
 def link_score(href: str, text: str, hints: list[str]) -> float:
@@ -387,6 +389,55 @@ class Fetcher:
 
 
 # ----------------------------------------------------------------- extraction
+
+def audit_product_page(product: dict, html: str, source_url: str = "") -> dict:
+    """Record product media visible in fetched HTML without treating absence as a proven problem."""
+    product_soup = soupify(html)
+    video_nodes = product_soup.find_all("video")
+    video_iframes = [
+        frame for frame in product_soup.find_all("iframe", src=True)
+        if re.search(r"(youtube|youtu\.be|vimeo|wistia|loom|\.mp4|\.webm)", str(frame.get("src")), re.I)
+    ]
+    video_sources = []
+    for node in video_nodes:
+        sources = node.find_all("source", src=True)
+        video_sources.extend(str(source.get("src")) for source in sources)
+        if node.get("src"):
+            video_sources.append(str(node.get("src")))
+    video_sources.extend(str(frame.get("src")) for frame in video_iframes)
+    image_nodes = product_soup.select(
+        ".product__media img, .product-media img, [data-product-media] img, "
+        ".product-gallery img, .product__photo img"
+    )
+    image_detection = "product gallery"
+    if not image_nodes:
+        extracted_images = set(product.get("image_urls") or [])
+        image_nodes = [
+            image for image in product_soup.find_all("img")
+            if (image.get("src") or image.get("data-src") or "") in extracted_images
+        ]
+        image_detection = "matched extracted product images" if image_nodes else "unknown"
+    product["presentation_audit"] = {
+        "page_checked": True,
+        "source_url": source_url or product.get("url") or "",
+        "image_count": len(image_nodes) if image_detection != "unknown" else None,
+        "image_detection": image_detection,
+        "video_detected": bool(video_nodes or video_iframes),
+        "video_count": len(video_nodes) + len(video_iframes),
+        "detection_scope": "fetched product page HTML",
+    }
+    if video_sources:
+        existing = product.get("video_assets")
+        if not isinstance(existing, list):
+            existing = []
+            product["video_assets"] = existing
+        known_urls = {asset.get("url") for asset in existing if isinstance(asset, dict)}
+        for video_url in video_sources:
+            if video_url and video_url not in known_urls:
+                existing.append({"type": "product_page_video", "url": video_url})
+                known_urls.add(video_url)
+    return product["presentation_audit"]
+
 
 def extract_products(payload: list[dict], max_products: int = 25, store_url: str = "") -> list[dict]:
     out = []
@@ -718,9 +769,10 @@ async def crawl_store(fetcher: Fetcher, lead: dict, settings: dict) -> dict:
     for kind, dl in defaults:
         got = links.get(kind)
         wanted.append((kind, got[1] if got else dl))
-    wanted.append(("privacy_alt", f"{origin}/pages/privacy-policy" if shopify else f"{origin}/privacy"))
     wanted.append(("extras", f"{origin}/policies/shipping-policy" if shopify else f"{origin}/shipping-policy"))
     wanted.append(("extras", f"{origin}/pages/contact" if shopify else f"{origin}/contact"))
+    if not shopify or not products:
+        wanted.append(("privacy_alt", f"{origin}/pages/privacy-policy" if shopify else f"{origin}/privacy"))
 
     fetched_pages: dict[str, dict] = {}
     texts: list[str] = []
@@ -741,6 +793,9 @@ async def crawl_store(fetcher: Fetcher, lead: dict, settings: dict) -> dict:
         fetched_pages[url] = {"kind": kind, "status": 200, "html": html}
         all_html.append(html)
         s = soupify(html)
+        if kind == "product":
+            result["pages"].append({"label": page_label(kind, str(final)), "url": str(final), "status": 200})
+            continue
         # Strip the mega-menu boilerplate we already saw on the homepage.
         paras = paragraphs(s, min_len=35, limit=70, exclude=home_exclude)
         texts.extend(paras)
@@ -770,6 +825,67 @@ async def crawl_store(fetcher: Fetcher, lead: dict, settings: dict) -> dict:
                 texts.extend(paras)
                 result["pages"].append({"label": "about page", "url": str(final), "status": 200})
                 break
+
+    if shopify and products:
+        privacy_checked = any(
+            page.get("kind") in {"privacy", "privacy_alt"} and page.get("status") == 200
+            for page in fetched_pages.values()
+        )
+        if not privacy_checked and attempts < max_pages:
+            privacy_alt_url = f"{origin}/pages/privacy-policy"
+            if privacy_alt_url not in fetched_pages:
+                status, html, final = await fetcher.get(privacy_alt_url)
+                attempts += 1
+                fetched_pages[privacy_alt_url] = {
+                    "kind": "privacy_alt",
+                    "status": 200 if status == 200 and html else status,
+                    "html": html if status == 200 else "",
+                }
+                if status == 200 and html:
+                    all_html.append(html)
+                    result["pages"].append({
+                        "label": page_label("privacy_alt", str(final)),
+                        "url": str(final),
+                        "status": 200,
+                    })
+
+        audit_cues = re.compile(
+            r"\b(clamp|install|assemble|setup|apply|wear|fit|adjust|pour|connect|attach|operate|routine|"
+            r"hiking|travel|compatib|care|maintenance|ingredient|insulated|waterproof|handmade|craftsmanship)\b",
+            re.I,
+        )
+        audit_candidates = sorted(
+            (product for product in products if product.get("url")),
+            key=lambda product: (
+                not bool(product.get("video_assets")),
+                bool(audit_cues.search(
+                    " ".join(str(product.get(field) or "") for field in ("title", "type", "description"))
+                )),
+                bool(product.get("description")),
+                bool(product.get("image")),
+                len(str(product.get("description") or "")),
+            ),
+            reverse=True,
+        )
+        audit_limit = max(0, min(3, max_pages - attempts))
+        for product in audit_candidates[:audit_limit]:
+            product_url = str(product["url"])
+            if attempts >= max_pages or product_url in fetched_pages:
+                continue
+            status, html, final = await fetcher.get(product_url)
+            attempts += 1
+            fetched_pages[product_url] = {
+                "kind": "product",
+                "status": 200 if status == 200 and html else status,
+                "html": html if status == 200 else "",
+            }
+            if status == 200 and html:
+                all_html.append(html)
+                result["pages"].append({
+                    "label": page_label("product", str(final)),
+                    "url": str(final),
+                    "status": 200,
+                })
 
     deduped, seen_urls, seen_labels = [], set(), set()
     for pg in result["pages"]:
@@ -809,6 +925,11 @@ async def crawl_store(fetcher: Fetcher, lead: dict, settings: dict) -> dict:
     facts["socials"] = find_socials(" ".join(all_html))
 
     products = rank_products(products)
+    for product in products:
+        page = fetched_pages.get(product.get("url") or "")
+        if not page or page.get("kind") != "product" or page.get("status") != 200:
+            continue
+        audit_product_page(product, page.get("html") or "", str(page.get("url") or product.get("url") or ""))
     facts["products"] = products
     if products:
         prices = []

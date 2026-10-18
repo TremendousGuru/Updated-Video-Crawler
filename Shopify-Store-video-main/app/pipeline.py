@@ -165,7 +165,7 @@ async def run_batch(run_id: str, ids: list[int], settings: dict) -> None:
     headers = dict(crawler.HEADERS)
 
     async with httpx.AsyncClient(
-        headers=headers, limits=limits, follow_redirects=True, verify=False,
+        headers=headers, limits=limits, follow_redirects=True,
         timeout=httpx.Timeout(25.0, connect=12.0),
     ) as client:
         fetcher = crawler.Fetcher(client, delay=delay, respect_robots=bool(settings.get("respect_robots", True)))

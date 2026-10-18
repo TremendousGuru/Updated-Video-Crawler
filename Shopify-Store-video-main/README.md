@@ -60,6 +60,10 @@ or is redeployed. The workspace is shared by authenticated users of that app, so
 deployment and do not treat it as a multi-user CRM. For long-term or sensitive lead storage,
 connect a managed database with access controls and backups before relying on the deployment.
 
+This is suitable for a private, single-user pilot after setting secrets and verifying the live
+crawl with a small batch. It is not production-ready for sensitive or long-lived CRM data until
+persistent managed storage and the required backup and access-control policies are configured.
+
 The original FastAPI interface remains available locally with `python -m app.main`. Its
 production password settings are separate from the Streamlit app's login secrets.
 
@@ -107,6 +111,8 @@ store finishes. Per store it reads:
 - **`/pages/about`** — story, founder name, founding year, brand values (this is where the best hooks live)
 - **Privacy policy, shipping, returns, contact** — proves a real visit and often surfaces details worth referencing
 - **`/products.json` + `/meta.json`** when the site is Shopify — real product names, prices, currency, collections, city
+- **Up to three relevant Shopify product pages, when the page limit permits** — prioritizes specific product use details rather than price. It checks fetched HTML for product images and video elements. A video not detected in that HTML is not treated as proof of a customer problem.
+- **Linked social profiles** — handles are collected when visible, but recent social posts are not assumed to have been reviewed. Social-content opportunities require explicit audit evidence.
 
 It then writes one message per store from those facts: a subject line plus three options, an opener
 that references something specific and checkable, who you are, the video offer, and a CTA.
@@ -135,9 +141,17 @@ you well". It returns a subject set plus the body as JSON.
 Works with any OpenAI-compatible endpoint — change **Base URL** + **Model** for OpenRouter, Groq,
 Together, or a Gemini compatibility endpoint. Use **Test** to confirm before a big run.
 
-**Without a key**: smart templates write from the same facts (real product name, real price point,
-real brand signal). Slower to get stale than you'd think, and free. Any key failure (bad key, rate
-limit, network) silently falls back to templates and tells you why in a toast.
+**Without a key**: deterministic local templates use the same crawled facts, diagnosis, and evidence
+checks. The app marks these drafts as locally composed. If an AI request fails (for example, due to
+a bad key, rate limit, or network error), it falls back to the same local path and records the reason
+in the composition note.
+
+Product candidates are scored from 0–10 using the evidence-backed opportunity, suitability of video,
+visual potential, brand fit, and any explicitly audited opportunity to improve existing video.
+Scores of 8–10 can be selected for a draft; 5–7 require evidence review, and lower scores are not
+prioritized. A creative opportunity is not presented as proof of low sales, conversion problems, or
+customer confusion. If the available evidence does not support a specific message, the app abstains
+and requests manual review.
 
 ---
 
@@ -146,12 +160,15 @@ limit, network) silently falls back to templates and tells you why in a toast.
 | Setting | Why |
 |---|---|
 | **Your name / company** | Used in the sign-off. Without it your emails end without a sender. |
-| **What you do** | The one-line pitch, e.g. "I make short product videos for Shopify stores". |
-| **How you pitch the video** | Since you don't have the video yet, the default teases it: "I already put together a short one for [product] to show you what I mean". Change it once you have a link. |
-| **Subject 1 idea** | Drives the blunt first subject, default `is this store active`. |
+| **What you do** | The service description is connected to the selected product opportunity rather than used as a generic opener. |
+| **Video offer line** | Defaults to offering a storyboard for review; it does not claim a video has already been made. |
+| **Call to action** | Defaults to a low-pressure invitation to see a short storyboard. |
+| **First subject idea** | Defaults to `a short video idea for {product}`; `{product}` is replaced with the selected product title. |
+| **Tone** | Defaults to warm, concise, specific, conversational wording without pressure or sales promises. |
 | **Opt-out line** | Keeps you on the right side of spam law and improves replies. Leave it on. |
-| **Stores at once** | 4 is polite. Above 6 invites rate-limiting. |
-| **Delay between requests** | 0.5s is fine for most hosts. Raise it if a store starts refusing connections. |
+| **Stores at once** | Defaults to 3 to keep crawl concurrency modest. |
+| **Delay between requests** | Defaults to 0.75s. Raise it if a store starts refusing connections. |
+| **Maximum pages per store** | Defaults to 10 to leave room for relevant product-page audits after core store pages. |
 | **Respect robots.txt** | On by default. Leave it on. |
 
 ---

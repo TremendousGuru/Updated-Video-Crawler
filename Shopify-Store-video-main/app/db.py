@@ -19,8 +19,8 @@ DEFAULTS: dict[str, Any] = {
     "sender_name": "",
     "sender_company": "",
     "sender_email": "",
-    "offer": "I make short product videos for Shopify stores",
-    "tone": "friendly, direct, no fluff, sounds like a real person",
+    "offer": "I create short, product-specific videos that show a product's use, details, or place in everyday life.",
+    "tone": "Warm, concise, specific, and conversational. Avoid pressure, jargon, and sales promises.",
     "subject_style": "mix",
     "optout": True,
     "optout_line": "Not interested? Just reply \"no\" and I won't follow up.",
@@ -28,13 +28,24 @@ DEFAULTS: dict[str, Any] = {
     "base_url": "https://api.openai.com/v1",
     "model": "gpt-4o-mini",
     "use_ai": True,
-    "concurrency": 4,
-    "request_delay": 0.5,
+    "concurrency": 3,
+    "request_delay": 0.75,
     "max_products": 25,
-    "max_pages": 5,
+    "max_pages": 10,
     "auto_compose": True,
     "respect_robots": True,
     "find_missing_emails": True,
+    "subject_hint": "a short video idea for {product}",
+    "video_line": "I can turn this idea into a short storyboard for you to review.",
+    "cta": "Would you be open to seeing a short storyboard for this idea?",
+}
+
+LEGACY_DEFAULTS = {
+    "offer": "I make short product videos for Shopify stores",
+    "tone": "friendly, direct, no fluff, sounds like a real person",
+    "concurrency": 4,
+    "request_delay": 0.5,
+    "max_pages": 5,
     "subject_hint": "is this store active",
     "video_line": "I already put together a short video for one of your products",
     "cta": "Want me to send it over?",
@@ -91,11 +102,27 @@ def load_settings() -> dict[str, Any]:
     env_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if env_key:
         s["api_key"] = env_key
-    for row in conn().execute("SELECT k, v FROM settings"):
+    c = conn()
+    for row in c.execute("SELECT k, v FROM settings"):
         try:
             s[row["k"]] = json.loads(row["v"])
         except (json.JSONDecodeError, TypeError):
             s[row["k"]] = row["v"]
+    migrated = {
+        key: DEFAULTS[key]
+        for key, legacy_value in LEGACY_DEFAULTS.items()
+        if s.get(key) == legacy_value
+    }
+    if migrated:
+        with _lock:
+            for key, value in migrated.items():
+                c.execute(
+                    "INSERT INTO settings (k, v) VALUES (?, ?) "
+                    "ON CONFLICT(k) DO UPDATE SET v=excluded.v",
+                    (key, json.dumps(value)),
+                )
+            c.commit()
+            s.update(migrated)
     return s
 
 
