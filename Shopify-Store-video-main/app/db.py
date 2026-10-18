@@ -36,19 +36,31 @@ DEFAULTS: dict[str, Any] = {
     "respect_robots": True,
     "find_missing_emails": True,
     "subject_hint": "a short video idea for {product}",
-    "video_line": "I can turn this idea into a short storyboard for you to review.",
-    "cta": "Would you be open to seeing a short storyboard for this idea?",
+    "video_line": "I can sketch out a short concept around it.",
+    "cta": "Would a short storyboard be useful?",
 }
 
-LEGACY_DEFAULTS = {
-    "offer": "I make short product videos for Shopify stores",
-    "tone": "friendly, direct, no fluff, sounds like a real person",
-    "concurrency": 4,
-    "request_delay": 0.5,
-    "max_pages": 5,
-    "subject_hint": "is this store active",
-    "video_line": "I already put together a short video for one of your products",
-    "cta": "Want me to send it over?",
+LEGACY_DEFAULTS: dict[str, tuple[Any, ...]] = {
+    "offer": (
+        "I make short product videos for Shopify stores",
+        "I create short, product-specific videos that show a product's use, details, or place in everyday life.",
+    ),
+    "tone": (
+        "friendly, direct, no fluff, sounds like a real person",
+        "Warm, concise, specific, and conversational. Avoid pressure, jargon, and sales promises.",
+    ),
+    "concurrency": (4, 3),
+    "request_delay": (0.5, 0.75),
+    "max_pages": (5, 10),
+    "subject_hint": ("is this store active", "a short video idea for {product}"),
+    "video_line": (
+        "I already put together a short video for one of your products",
+        "I can turn this idea into a short storyboard for you to review.",
+    ),
+    "cta": (
+        "Want me to send it over?",
+        "Would you be open to seeing a short storyboard for this idea?",
+    ),
 }
 
 SCHEMA = """
@@ -110,8 +122,8 @@ def load_settings() -> dict[str, Any]:
             s[row["k"]] = row["v"]
     migrated = {
         key: DEFAULTS[key]
-        for key, legacy_value in LEGACY_DEFAULTS.items()
-        if s.get(key) == legacy_value
+        for key, legacy_values in LEGACY_DEFAULTS.items()
+        if s.get(key) in legacy_values
     }
     if migrated:
         with _lock:

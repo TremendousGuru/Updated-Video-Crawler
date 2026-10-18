@@ -226,10 +226,17 @@ async def compose_lead(lead_id: int):
             pipeline.bus_publish(run_id, {"type": "done"})
             return
         subs = out.get("subjects") or [composer.local_subject_for(facts, settings)]
+        notes = out.get("hook") or ""
+        if out.get("fallback_reason"):
+            notes = f"{notes} [AI fallback: {out['fallback_reason']}]".strip()
+        if out.get("manual_review_recommended"):
+            score = out.get("intelligence", {}).get("product_selection", {}).get("score", 0)
+            notes = f"{notes} [Manual review recommended: score {score}/10]".strip()
         db.update_lead(lead_id, status="ready", subjects=subs, subject=subs[0], body=out.get("body", ""),
-                       engine=out.get("engine", ""), notes=(out.get("hook") or "")[:300], error="")
+                       engine=out.get("engine", ""), notes=notes[:300], error="")
         pipeline.bus_publish(run_id, {"type": "update", "id": lead_id, "status": "ready", "subjects": subs,
-                                      "subject": subs[0], "body": out.get("body", ""), "engine": out.get("engine", "")})
+                                      "subject": subs[0], "body": out.get("body", ""), "engine": out.get("engine", ""),
+                                      "manual_review_recommended": out.get("manual_review_recommended", False)})
         pipeline.bus_publish(run_id, {"type": "done"})
 
     asyncio.get_running_loop().create_task(go())

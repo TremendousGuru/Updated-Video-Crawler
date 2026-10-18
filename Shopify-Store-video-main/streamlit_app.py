@@ -217,7 +217,7 @@ def save_settings_form(settings: dict) -> None:
         tone = st.text_input(
             "Tone",
             value=settings.get("tone", ""),
-            help="Guides both AI-written and local fallback drafts.",
+            help="Guides AI-written drafts. Local drafts use a consistent concise, conversational style.",
         )
         optout = st.checkbox("Include opt-out line", value=bool(settings.get("optout", True)))
         optout_line = st.text_input("Opt-out line", value=settings.get("optout_line", ""))
@@ -376,9 +376,12 @@ def main() -> None:
                 if lead_view == "All" or lead.get("status") in view_statuses[lead_view]
             ]
 
-            scope = st.selectbox("Crawl", ["Queued and failed", "Failed only", "All stores"])
+            scope = st.selectbox(
+                "Crawl",
+                ["Queued, manual-review and failed", "Failed only", "All stores"],
+            )
             status_filter = {
-                "Queued and failed": ["pending", "failed"],
+                "Queued, manual-review and failed": ["pending", "crawled", "failed"],
                 "Failed only": ["failed"],
                 "All stores": None,
             }[scope]
@@ -484,6 +487,15 @@ def show_lead(lead: dict, settings: dict) -> None:
     elif engine.startswith("ai:"):
         st.caption(f"Composition engine: {engine}")
 
+    review_recommended = "Manual review recommended:" in str(full.get("notes") or "")
+    review_approved = True
+    if review_recommended:
+        st.warning("This draft is based on a 5–7/10 candidate. Check the cited product details and revise the message before sending.")
+        review_approved = st.checkbox(
+            "I reviewed the product evidence and this draft",
+            key=f"review_approved_{lead['id']}",
+        )
+
     subjects = full.get("subjects") or []
     selected_subject = st.selectbox(
         "Subject", options=[""] + subjects, index=(subjects.index(full.get("subject")) + 1)
@@ -498,6 +510,7 @@ def show_lead(lead: dict, settings: dict) -> None:
         and lead.get("email")
         and subject.strip()
         and body.strip()
+        and review_approved
     )
     if not already_sent and can_send:
         mailto = f"mailto:{quote(lead['email'], safe='')}?subject={quote(subject)}&body={quote(body)}"
@@ -588,6 +601,8 @@ def show_lead(lead: dict, settings: dict) -> None:
                     st.json(evidence)
                 if quality.get("manual_review_required"):
                     st.warning("Manual review recommended: " + "; ".join(quality.get("review_reasons") or ["evidence is weak"]))
+                elif quality.get("manual_review_recommended"):
+                    st.warning("A draft is available, but this 5–7/10 candidate needs human review before sending.")
             else:
                 st.info("No strong video opportunity was identified from the current evidence.")
             st.json(intelligence)

@@ -1019,11 +1019,14 @@ def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan
         else 1 if title and (p.get("type") or p.get("tags"))
         else 0
     )
-    video_fit = 3 if category in {
-        "product_education", "purchase_confidence", "benefit_communication", "lifestyle_or_use_case",
-        "brand_story_or_craftsmanship", "existing_video_fresh_angle", "social_content_variety",
-        "premium_product_presentation",
-    } and specific_detail else (
+    video_fit = 3 if (
+        category in {
+            "product_education", "purchase_confidence", "benefit_communication", "lifestyle_or_use_case",
+            "brand_story_or_craftsmanship", "existing_video_fresh_angle", "social_content_variety",
+            "premium_product_presentation", "product_detail_or_benefit",
+        }
+        and specific_detail
+    ) else (
         2 if diagnosis.get("primary_opportunity") else 0
     )
     visual = 2 if (
@@ -1031,7 +1034,7 @@ def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan
         or
         re.search(r"\b(show|use|wear|fit|clamp|install|apply|adjust|pour|assemble|routine|hiking|travel|heating|copper|core|walnut|scent|handmade|craftsmanship|small[- ]batch)\b", f"{title} {description} {p.get('type', '')}", re.I)
         or re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", title, re.I)
-    ) else (1 if p.get("type") else 0)
+    ) else (1 if p.get("type") or p.get("image") else 0)
     known_categories = [str(v).lower() for v in profile.get("main_product_categories", [])]
     inferred_category = str(p.get("type") or "").lower()
     if not inferred_category:
@@ -1073,12 +1076,10 @@ def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> d
             ranked.append({"product": product, "plan": plan})
     ranked.sort(key=lambda item: item["plan"].get("score", 0), reverse=True)
     top_score = ranked[0]["plan"].get("score", 0) if ranked else 0
-    if not ranked or top_score < 8:
-        selection_status = "manual_review" if top_score >= 5 else "deprioritized"
+    if not ranked or top_score < 5:
+        selection_status = "deprioritized"
         selection_reason = (
-            f"The strongest candidate scored {top_score}/10 and needs evidence review before outreach."
-            if selection_status == "manual_review"
-            else f"The strongest candidate scored {top_score}/10 and is below the prioritization threshold."
+            f"The strongest candidate scored {top_score}/10 and is below the minimum draft threshold."
         )
         return {
             "product_name": "",
@@ -1094,13 +1095,18 @@ def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> d
         }
     primary = ranked[0]
     product = primary["product"]
+    needs_review = primary["plan"].get("score", 0) < 8
     return {
         "product_name": str(product.get("title") or ""),
         "product_url": str(product.get("url") or ""),
-        "selection_reason": "Selected because its extracted details support a specific, visually communicable concept.",
+        "selection_reason": (
+            f"Candidate scored {primary['plan'].get('score', 0)}/10. Compose a draft for human review before sending."
+            if needs_review
+            else "Selected because its extracted details support a specific, visually communicable concept."
+        ),
         "score": primary["plan"].get("score", 0),
         "score_breakdown": primary["plan"].get("score_breakdown", {}),
-        "selection_status": "strong_candidate",
+        "selection_status": "review_candidate" if needs_review else "strong_candidate",
         "alternative_candidates": [
             {"product_name": str(item["product"].get("title") or ""), "score": item["plan"].get("score", 0)}
             for item in ranked[1:3]
@@ -1225,11 +1231,11 @@ def generate_outreach_message(facts: dict, store_profile: dict, diagnosis: dict,
         "I create short, product-specific videos that show a product's use, details, or place in everyday life"
     )).strip().rstrip(".!? ")
     video_offer_line = str(settings.get("video_line") or (
-        "I can turn this idea into a short storyboard for you to review."
+        "I can sketch out a short concept around it."
     )).strip()
     cta = str(settings.get("cta") or "").strip()
     if not cta or cta.lower() == "want me to send it over?":
-        cta = "Would you be open to seeing a short storyboard?"
+        cta = "Would a short storyboard be useful?"
     elif not cta.endswith(("?", ".", "!")):
         cta += "?"
     message = (
@@ -1335,9 +1341,10 @@ def compose_store_intelligence(facts: dict, settings: dict | None = None) -> dic
         "video_opportunity_found": bool(diagnosis.get("primary_opportunity")),
         "personalization_verified": outreach_quality["personalization_verified"],
         "manual_review_required": outreach_quality["manual_review_required"] or not evidence_sufficient,
+        "manual_review_recommended": selection.get("selection_status") == "review_candidate",
         "review_reasons": outreach_quality["review_reasons"] + (
             [selection["selection_reason"]]
-            if selection.get("selection_status") in {"manual_review", "deprioritized"} else []
+            if selection.get("selection_status") in {"review_candidate", "deprioritized"} else []
         ) + (diagnosis.get("limitations") or [] if not evidence_sufficient or not diagnosis.get("primary_opportunity") else []),
         "outreach_checks": outreach_quality,
     }
@@ -1417,5 +1424,6 @@ async def compose(facts: dict, settings: dict, store_hint: str = "the store") ->
         "writing_mode": writing_mode,
         "fallback_reason": fallback_reason,
         "manual_review_required": False,
+        "manual_review_recommended": intelligence["quality_control"]["manual_review_recommended"],
         "intelligence": intelligence,
     }

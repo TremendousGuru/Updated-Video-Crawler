@@ -177,6 +177,11 @@ async function loadDrawer(id) {
   $("#dEngine").textContent = l.engine ? `written by ${l.engine}` : "";
   $("#dFlags").textContent = (l.flags || []).length ? "Notes: " + l.flags.join(" · ") : "";
   $("#dShot").textContent = l.notes ? `Hook used: ${l.notes}` : "";
+  const reviewWrap = $("#dReviewWrap");
+  const reviewBox = $("#dReview");
+  const reviewRequired = (l.notes || "").includes("Manual review recommended:");
+  reviewWrap.classList.toggle("hidden", !reviewRequired);
+  reviewBox.checked = false;
 
   const chips = $("#dSubjects");
   const subs = l.subjects || [];
@@ -252,6 +257,10 @@ function gmailUrl(to, subject, body) {
 async function sendVia(kind) {
   if (!state.current) return;
   const lead = state.detail || {};
+  if ((lead.notes || "").includes("Manual review recommended:") && !$("#dReview").checked) {
+    toast("Review and confirm the product evidence before using this draft.", true);
+    return;
+  }
   const to = lead.email || "";
   const subject = $("#dSubject").value.trim();
   const body = $("#dBody").value;
@@ -421,6 +430,11 @@ function init() {
     toast("Subject and body copied");
   });
   $("#btnMarkSent").addEventListener("click", async () => {
+    const lead = state.detail || {};
+    if ((lead.notes || "").includes("Manual review recommended:") && !$("#dReview").checked) {
+      toast("Review and confirm the product evidence before marking this draft sent.", true);
+      return;
+    }
     await api(`/api/leads/${state.current}`, {
       method: "PATCH", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
@@ -468,7 +482,7 @@ function scopeStatuses() {
   const v = $("#scopeSelect").value;
   if (v === "failed") return ["failed"];
   if (v === "all") return null;
-  return ["pending", "failed"];
+  return ["pending", "crawled", "failed"];
 }
 
 document.addEventListener("DOMContentLoaded", init);

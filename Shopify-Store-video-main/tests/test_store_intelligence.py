@@ -172,10 +172,12 @@ def test_batch_compose_uses_evidence_based_1legacy_hat_concept():
     intelligence = result["intelligence"]
     message = result["body"]
     assert intelligence["diagnosis"]["opportunity_category"] == "real_world_appearance"
-    assert intelligence["product_selection"]["selection_status"] == "manual_review"
-    assert intelligence["product_selection"]["score"] < 8
-    assert message == ""
-    assert intelligence["quality_control"]["manual_review_required"] is True
+    assert intelligence["product_selection"]["selection_status"] == "review_candidate"
+    assert 5 <= intelligence["product_selection"]["score"] < 8
+    assert message
+    assert "UR AN WIZARD HARRY hat" in message
+    assert result["manual_review_required"] is False
+    assert result["manual_review_recommended"] is True
 
 
 def test_practical_product_concept_uses_description_evidence():
@@ -375,6 +377,28 @@ def test_weak_candidate_is_deprioritized_below_five_points():
     assert result["quality_control"]["manual_review_required"] is True
 
 
+def test_five_to_seven_candidate_gets_reviewable_local_draft():
+    facts = {
+        "store_name": "Everyday Goods",
+        "domain": "everyday.example",
+        "url": "https://everyday.example",
+        "products": [{
+            "title": "Everyday Canvas Tote Bag",
+            "url": "https://everyday.example/products/tote",
+            "description": "",
+            "image": True,
+        }],
+    }
+
+    result = asyncio.run(compose_mod.compose(facts, {"use_ai": False}))
+
+    assert result["body"]
+    assert "Everyday Canvas Tote Bag" in result["body"]
+    assert result["manual_review_required"] is False
+    assert result["manual_review_recommended"] is True
+    assert result["intelligence"]["product_selection"]["selection_status"] == "review_candidate"
+
+
 def test_quality_gate_rejects_generic_message_with_only_product_name():
     facts = {"products": [{"title": "Clamp-On Task Light", "description": "Clamp onto a desk edge.", "type": "Lighting"}]}
     product = facts["products"][0]
@@ -501,7 +525,7 @@ def test_local_fallback_runs_without_api_key(monkeypatch):
     assert "Clamp-On Task Light" in result["body"]
     assert "clamp" in result["body"].lower()
     assert "I create short, product-specific videos" in result["body"]
-    assert "short storyboard for you to review" in result["body"]
+    assert "short concept around it" in result["body"]
     assert result["subjects"] == ["a short video idea for Clamp-On Task Light"]
 
 
@@ -540,8 +564,8 @@ def test_new_defaults_and_legacy_default_migration(tmp_path, monkeypatch):
     initial = db.load_settings()
 
     assert initial["offer"].startswith("I create short, product-specific videos")
-    assert initial["video_line"] == "I can turn this idea into a short storyboard for you to review."
-    assert initial["cta"] == "Would you be open to seeing a short storyboard for this idea?"
+    assert initial["video_line"] == "I can sketch out a short concept around it."
+    assert initial["cta"] == "Would a short storyboard be useful?"
     assert initial["subject_hint"] == "a short video idea for {product}"
     assert initial["tone"].startswith("Warm, concise, specific")
     assert initial["max_pages"] == 10
@@ -549,10 +573,10 @@ def test_new_defaults_and_legacy_default_migration(tmp_path, monkeypatch):
     assert initial["request_delay"] == 0.75
 
     db.save_settings({
-        "offer": db.LEGACY_DEFAULTS["offer"],
-        "video_line": db.LEGACY_DEFAULTS["video_line"],
-        "cta": db.LEGACY_DEFAULTS["cta"],
-        "subject_hint": db.LEGACY_DEFAULTS["subject_hint"],
+        "offer": db.LEGACY_DEFAULTS["offer"][0],
+        "video_line": db.LEGACY_DEFAULTS["video_line"][0],
+        "cta": db.LEGACY_DEFAULTS["cta"][0],
+        "subject_hint": db.LEGACY_DEFAULTS["subject_hint"][0],
     })
     migrated = db.load_settings()
 
@@ -563,3 +587,16 @@ def test_new_defaults_and_legacy_default_migration(tmp_path, monkeypatch):
 
     db.save_settings({"offer": "I produce short documentary-style product films."})
     assert db.load_settings()["offer"] == "I produce short documentary-style product films."
+
+    db.save_settings({
+        "offer": db.LEGACY_DEFAULTS["offer"][1],
+        "video_line": db.LEGACY_DEFAULTS["video_line"][1],
+        "cta": db.LEGACY_DEFAULTS["cta"][1],
+        "subject_hint": db.LEGACY_DEFAULTS["subject_hint"][1],
+    })
+    migrated_recent = db.load_settings()
+
+    assert migrated_recent["offer"] == db.DEFAULTS["offer"]
+    assert migrated_recent["video_line"] == db.DEFAULTS["video_line"]
+    assert migrated_recent["cta"] == db.DEFAULTS["cta"]
+    assert migrated_recent["subject_hint"] == db.DEFAULTS["subject_hint"]

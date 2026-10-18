@@ -131,6 +131,9 @@ async def _process_one(lead_id: int, fetcher: crawler.Fetcher, settings: dict, r
     notes = out.get("hook") or ""
     if out.get("fallback_reason"):
         notes = f"{notes} [AI fallback: {out['fallback_reason']}]".strip()
+    if out.get("manual_review_recommended"):
+        score = out.get("intelligence", {}).get("product_selection", {}).get("score", 0)
+        notes = f"{notes} [Manual review recommended: score {score}/10]".strip()
 
     db.update_lead(
         lead_id,
@@ -150,6 +153,8 @@ async def _process_one(lead_id: int, fetcher: crawler.Fetcher, settings: dict, r
     }
     if out.get("fallback_reason"):
         ev["warning"] = f"AI failed, used template: {out['fallback_reason']}"
+    if out.get("manual_review_recommended"):
+        ev["manual_review_recommended"] = True
     bus_publish(run_id, ev)
     return {"id": lead_id, "status": "ready"}
 
