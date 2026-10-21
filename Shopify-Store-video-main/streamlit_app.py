@@ -487,14 +487,8 @@ def show_lead(lead: dict, settings: dict) -> None:
     elif engine.startswith("ai:"):
         st.caption(f"Composition engine: {engine}")
 
-    review_recommended = "Manual review recommended:" in str(full.get("notes") or "")
-    review_approved = True
-    if review_recommended:
-        st.warning("This draft is based on a 5–7/10 candidate. Check the cited product details and revise the message before sending.")
-        review_approved = st.checkbox(
-            "I reviewed the product evidence and this draft",
-            key=f"review_approved_{lead['id']}",
-        )
+    if "Manual review recommended:" in str(full.get("notes") or ""):
+        st.warning("This draft is based on a 5–7/10 candidate. Review the cited product details if needed; this does not block sending.")
 
     subjects = full.get("subjects") or []
     selected_subject = st.selectbox(
@@ -510,7 +504,6 @@ def show_lead(lead: dict, settings: dict) -> None:
         and lead.get("email")
         and subject.strip()
         and body.strip()
-        and review_approved
     )
     if not already_sent and can_send:
         mailto = f"mailto:{quote(lead['email'], safe='')}?subject={quote(subject)}&body={quote(body)}"
@@ -602,7 +595,7 @@ def show_lead(lead: dict, settings: dict) -> None:
                 if quality.get("manual_review_required"):
                     st.warning("Manual review recommended: " + "; ".join(quality.get("review_reasons") or ["evidence is weak"]))
                 elif quality.get("manual_review_recommended"):
-                    st.warning("A draft is available, but this 5–7/10 candidate needs human review before sending.")
+                    st.warning("A draft is available for this 5–7/10 candidate. Review is optional and does not block sending.")
             else:
                 st.info("No strong video opportunity was identified from the current evidence.")
             st.json(intelligence)

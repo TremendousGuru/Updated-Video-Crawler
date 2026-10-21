@@ -148,11 +148,11 @@ in the composition note.
 
 Product candidates are scored from 0–10 using the evidence-backed opportunity, suitability of video,
 visual potential, brand fit, and any explicitly audited opportunity to improve existing video.
-Scores of 8–10 can be drafted normally. Scores of 5–7 produce a draft flagged for human review, and
-the app requires an explicit review confirmation before enabling the send action. Candidates below 5
-are not drafted. A creative opportunity is not presented as proof of low sales, conversion problems,
-or customer confusion. If the available evidence does not support a specific message, the app abstains
-and requests manual review.
+Scores of 8–10 can be drafted normally. Scores of 5–7 produce a draft with a review recommendation,
+but review confirmation is optional and does not gate sending. Candidates below 5 are not drafted.
+A creative opportunity is not presented as proof of low sales, conversion problems, or customer
+confusion. If the available evidence does not support a specific message, the app abstains and
+requests manual review.
 
 ---
 
