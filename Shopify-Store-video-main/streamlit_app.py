@@ -293,9 +293,6 @@ def save_settings_form(settings: dict) -> None:
 
 def main() -> None:
     require_login()
-    st.title("Outreach Studio")
-    st.caption("Upload stores → crawl → review personalized drafts → open in your email app.")
-
     settings = load_settings()
     save_settings_form(settings)
     leads = table_rows()
@@ -303,120 +300,105 @@ def main() -> None:
     counts = {}
     for lead in leads:
         counts[lead["status"]] = counts.get(lead["status"], 0) + 1
+
+    st.markdown(
+        """
+        <style>
+        :root { --outreach-bg:#0b0d11; --outreach-panel:#14171d; --outreach-line:#292f38; --outreach-text:#e9ebef; --outreach-muted:#929aa7; --outreach-red:#ed6262; }
+        [data-testid="stAppViewContainer"] { background:var(--outreach-bg); color:var(--outreach-text); }
+        [data-testid="stHeader"] { background:rgba(11,13,17,.92); }
+        [data-testid="stSidebar"] { background:#13161c; border-right:1px solid #242831; }
+        [data-testid="stSidebar"] h2 { font-size:1rem; }
+        .block-container { max-width:1600px; padding:1rem 1.1rem 1.5rem; }
+        h1 { font-size:1.2rem !important; }
+        h2 { font-size:1.05rem !important; }
+        h3 { font-size:.98rem !important; }
+        [data-testid="stVerticalBlockBorderWrapper"] { background:var(--outreach-panel); border-color:var(--outreach-line); border-radius:7px; }
+        [data-testid="stDataFrame"] { border:1px solid var(--outreach-line); border-radius:5px; }
+        [data-testid="stMetric"] { padding:.35rem .55rem; background:#151920; border:1px solid #252a33; border-radius:5px; }
+        [data-testid="stMetricLabel"] { color:var(--outreach-muted); font-size:.72rem; }
+        [data-testid="stMetricValue"] { font-size:1.15rem; }
+        .stButton button, .stDownloadButton button, .stLinkButton a { border-radius:5px; border-color:#343b46; }
+        .stButton button[kind="primary"] { background:#ed6262; border-color:#ed6262; color:white; }
+        [data-testid="stExpander"] { border-color:var(--outreach-line); border-radius:5px; }
+        @media(max-width:760px) { .block-container { padding:.6rem .55rem 1rem; } }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Outreach Studio")
+    st.caption("Upload → Crawl → Review Drafts → Send")
     metric_cols = st.columns(4)
     metric_cols[0].metric("Stores", len(leads))
     metric_cols[1].metric("Ready", counts.get("ready", 0))
     metric_cols[2].metric("Sent", counts.get("sent", 0))
     metric_cols[3].metric("Failed", counts.get("failed", 0))
 
-    upload_tab, leads_tab, exports_tab = st.tabs(["Add stores", "Leads", "Export"])
-    with upload_tab:
-        st.subheader("Add your store list")
-        files = st.file_uploader(
-            "Upload CSV, XLSX or TXT", type=["csv", "tsv", "txt", "xlsx", "xlsm", "xls"], accept_multiple_files=True
-        )
-        pasted = st.text_area("Or paste rows (email, domain, and store name; one store per line)")
-        if st.button("Add stores", type="primary"):
-            parsed: list[dict] = []
-            reports = []
-            for file in files or []:
-                try:
-                    rows = ingest.parse_file(file.name, file.getvalue())
-                    parsed.extend(rows)
-                    reports.append(f"{file.name}: {len(rows)} rows read")
-                except (ValueError, OSError) as exc:
-                    reports.append(f"{file.name}: {exc}")
-            if pasted.strip():
-                rows = ingest.parse_pasted(pasted)
-                parsed.extend(rows)
-                reports.append(f"Pasted text: {len(rows)} rows read")
-            added = db.insert_leads(parsed) if parsed else []
-            for report in reports:
-                st.write(report)
-            if added:
-                st.success(f"Added {len(added)} new stores (duplicates skipped).")
-            elif not parsed:
-                st.warning("No usable rows found. Each row needs an email address and/or store domain.")
-            else:
-                st.info("No new stores were added; all entries may already be in the list.")
-            st.rerun()
-        st.download_button(
-            "Download CSV template",
-            data="email,domain,store_name\nhello@example.com,example.com,Example Store\n",
-            file_name="leads-template.csv",
-            mime="text/csv",
-        )
-        if st.button("Load example stores"):
-            examples = ingest.parse_pasted(
-                "hello@deathwishcoffee.com, deathwishcoffee.com, Death Wish Coffee\n"
-                "browngirljane.com\n"
-                "hello@allbirds.com | allbirds.com | Allbirds\n"
-                "hi@bombas.com, bombas.com\n"
-                "contact@gingerpeople.com, gingerpeople.com"
-            )
-            db.insert_leads(examples)
-            st.rerun()
-
-    with leads_tab:
-        st.subheader("Crawl and compose")
-        if not leads:
-            st.info("Add a list of stores to get started.")
+    advance_action = st.session_state.pop("advance_to_ready", None)
+    if advance_action is not None:
+        st.session_state["lead_view"] = "Ready"
+        if advance_action["next_id"] is None:
+            st.session_state.pop("review_lead_id", None)
+            st.info("Marked sent. There are no more Ready drafts.")
         else:
-            advance_action = st.session_state.pop("advance_to_ready", None)
-            if advance_action is not None:
-                st.session_state["lead_view"] = "Ready"
-                if advance_action["next_id"] is None:
-                    st.session_state.pop("review_lead_id", None)
-                else:
-                    st.session_state["review_lead_id"] = advance_action["next_id"]
+            st.session_state["review_lead_id"] = advance_action["next_id"]
+            st.success("Marked sent. The next Ready draft is loaded in the review pane.")
 
-            lead_view = st.selectbox(
-                "Show leads", ["All", "Pending", "Ready", "Sent", "Failed"], key="lead_view"
-            )
-            if advance_action is not None:
-                if advance_action["next_id"] is None:
-                    st.success("Marked sent. There are no more Ready drafts.")
-                else:
-                    st.success("Marked sent. The next Ready draft is loaded below.")
-            view_statuses = {
-                "Pending": {"pending", "crawled", "crawling", "composing"},
-                "Ready": {"ready"},
-                "Sent": {"sent"},
-                "Failed": {"failed"},
-            }
+    lead_view_statuses = {
+        "Queued": {"pending", "crawled", "crawling", "composing"},
+        "Ready": {"ready"},
+        "Sent": {"sent"},
+        "Failed": {"failed"},
+    }
+    left, right = st.columns([1.03, 0.97], gap="small")
+    with left:
+        with st.container(border=True):
+            st.subheader("Leads")
+            filter_col, crawl_col = st.columns([0.8, 1.2])
+            with filter_col:
+                lead_view = st.selectbox(
+                    "Show", ["Ready", "All", "Queued", "Sent", "Failed"], key="lead_view"
+                )
+            with crawl_col:
+                scope = st.selectbox(
+                    "Crawl", ["Queued, manual-review and failed", "Failed only", "All stores"],
+                    key="crawl_scope",
+                )
+
             visible_leads = [
                 lead for lead in leads
-                if lead_view == "All" or lead.get("status") in view_statuses[lead_view]
+                if lead_view == "All" or lead.get("status") in lead_view_statuses[lead_view]
             ]
-
-            scope = st.selectbox(
-                "Crawl",
-                ["Queued, manual-review and failed", "Failed only", "All stores"],
-            )
             status_filter = {
                 "Queued, manual-review and failed": ["pending", "crawled", "failed"],
                 "Failed only": ["failed"],
                 "All stores": None,
             }[scope]
-            ids = db.lead_ids(statuses=status_filter)
-            if st.button("Crawl & compose", type="primary", disabled=not ids):
-                with st.spinner(f"Processing {len(ids)} stores..."):
-                    result = run_ids(ids, settings)
-                st.success(f"Finished: {result['ready']} ready, {result['failed']} failed.")
-                st.rerun()
+            crawl_ids = db.lead_ids(statuses=status_filter)
+            crawl_actions = st.columns([1.25, 0.75])
+            with crawl_actions[0]:
+                if st.button("Crawl & compose", type="primary", disabled=not crawl_ids, use_container_width=True):
+                    with st.spinner(f"Processing {len(crawl_ids)} stores..."):
+                        result = run_ids(crawl_ids, settings)
+                    st.success(f"Finished: {result['ready']} ready, {result['failed']} failed.")
+                    st.rerun()
+            with crawl_actions[1]:
+                st.caption(f"{len(visible_leads)} in view")
 
-            frame = [{
-                "Store": lead.get("store_name") or "—", "Domain": lead.get("domain", ""),
-                "Email": lead.get("email", ""), "Status": lead.get("status", ""),
-                "Details": lead.get("error") or lead.get("notes") or lead.get("engine", ""),
-            } for lead in visible_leads]
-            if not visible_leads:
-                st.info(f"No {lead_view.lower()} leads.")
-                selected_ids = []
-            else:
+            if visible_leads:
                 selection = st.dataframe(
-                    frame, hide_index=True, use_container_width=True,
-                    on_select="rerun", selection_mode="multi-row", key="lead_table",
+                    [{
+                        "Store": lead.get("store_name") or "—",
+                        "Domain": lead.get("domain", ""),
+                        "Email": lead.get("email", ""),
+                        "Status": lead.get("status", ""),
+                    } for lead in visible_leads],
+                    hide_index=True,
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="multi-row",
+                    key="lead_table",
                 )
                 selected_rows = selection.selection.rows
                 selected_ids = [
@@ -424,15 +406,21 @@ def main() -> None:
                     for index in selected_rows
                     if index < len(visible_leads)
                 ]
-            action_cols = st.columns(3)
+                if selected_rows:
+                    st.session_state["review_lead_id"] = visible_leads[selected_rows[-1]]["id"]
+            else:
+                st.info("No leads in this view.")
+                selected_ids = []
+
+            action_cols = st.columns([1.05, 1.05, 0.9])
             with action_cols[0]:
-                if st.button("Crawl selected", disabled=not selected_ids):
+                if st.button("Crawl selected", disabled=not selected_ids, use_container_width=True):
                     with st.spinner(f"Processing {len(selected_ids)} stores..."):
                         result = run_ids(selected_ids, settings)
                     st.success(f"Finished: {result['ready']} ready, {result['failed']} failed.")
                     st.rerun()
             with action_cols[1]:
-                if st.button("Delete all leads"):
+                if st.button("Delete all leads", disabled=not leads, use_container_width=True):
                     st.session_state["confirm_delete"] = True
             with action_cols[2]:
                 st.caption(f"{len(selected_ids)} selected")
@@ -443,42 +431,96 @@ def main() -> None:
                     if st.button("Confirm delete", type="primary"):
                         db.clear_leads()
                         st.session_state.pop("confirm_delete", None)
+                        st.session_state.pop("review_lead_id", None)
                         st.rerun()
                 with cancel_col:
                     if st.button("Cancel delete"):
                         st.session_state.pop("confirm_delete", None)
                         st.rerun()
 
-            st.divider()
-            if visible_leads:
-                lead_by_id = {lead["id"]: lead for lead in visible_leads}
-                chosen_id = st.selectbox(
-                    "Review a lead",
-                    options=[lead["id"] for lead in visible_leads],
-                    format_func=lambda lead_id: (
-                        lead_by_id[lead_id].get("store_name")
-                        or lead_by_id[lead_id].get("domain")
-                        or str(lead_id)
-                    ),
-                    key="review_lead_id",
+            with st.expander("＋ Upload CSV", expanded=not leads):
+                files = st.file_uploader(
+                    "CSV, Excel or TXT", type=["csv", "tsv", "txt", "xlsx", "xlsm", "xls"],
+                    accept_multiple_files=True, key="lead_files",
                 )
-                show_lead(lead_by_id[chosen_id], settings)
-            elif lead_view == "Ready":
-                st.info("No Ready drafts. Crawl and compose leads to create drafts.")
+                pasted = st.text_area("Paste store rows", key="pasted_leads")
+                upload_cols = st.columns(3)
+                with upload_cols[0]:
+                    if st.button("Add stores", type="primary", use_container_width=True):
+                        parsed: list[dict] = []
+                        reports = []
+                        for file in files or []:
+                            try:
+                                rows = ingest.parse_file(file.name, file.getvalue())
+                                parsed.extend(rows)
+                                reports.append(f"{file.name}: {len(rows)} rows read")
+                            except (ValueError, OSError) as exc:
+                                reports.append(f"{file.name}: {exc}")
+                        if pasted.strip():
+                            rows = ingest.parse_pasted(pasted)
+                            parsed.extend(rows)
+                            reports.append(f"Pasted text: {len(rows)} rows read")
+                        added = db.insert_leads(parsed) if parsed else []
+                        for report in reports:
+                            st.write(report)
+                        if added:
+                            st.success(f"Added {len(added)} new stores (duplicates skipped).")
+                        elif not parsed:
+                            st.warning("Each row needs an email address and/or store domain.")
+                        else:
+                            st.info("No new stores were added; entries may already exist.")
+                        st.rerun()
+                with upload_cols[1]:
+                    if st.button("Load examples", use_container_width=True):
+                        examples = ingest.parse_pasted(
+                            "hello@deathwishcoffee.com, deathwishcoffee.com, Death Wish Coffee\n"
+                            "browngirljane.com\n"
+                            "hello@allbirds.com | allbirds.com | Allbirds\n"
+                            "hi@bombas.com, bombas.com\n"
+                            "contact@gingerpeople.com, gingerpeople.com"
+                        )
+                        db.insert_leads(examples)
+                        st.rerun()
+                with upload_cols[2]:
+                    st.download_button(
+                        "CSV template",
+                        data="email,domain,store_name\nhello@example.com,example.com,Example Store\n",
+                        file_name="leads-template.csv", mime="text/csv", use_container_width=True,
+                    )
 
-    with exports_tab:
-        st.subheader("Export drafts")
-        all_leads = table_rows()
-        ready_leads = [lead for lead in all_leads if lead.get("status") in {"ready", "sent"}]
-        export_scope = st.radio("Include", ["Ready and sent", "All leads"], horizontal=True)
-        export_leads = ready_leads if export_scope == "Ready and sent" else all_leads
-        st.download_button(
-            "Export CSV", data=export_csv(export_leads), file_name="personalized-messages.csv", mime="text/csv"
-        )
-        st.download_button(
-            "Export JSON", data=export_json(export_leads), file_name="personalized-messages.json",
-            mime="application/json",
-        )
+            with st.expander("Export"):
+                all_leads = table_rows()
+                ready_leads = [lead for lead in all_leads if lead.get("status") in {"ready", "sent"}]
+                export_scope = st.radio("Include", ["Ready and sent", "All leads"], horizontal=True)
+                export_leads = ready_leads if export_scope == "Ready and sent" else all_leads
+                export_cols = st.columns(2)
+                with export_cols[0]:
+                    st.download_button(
+                        "Export CSV", data=export_csv(export_leads), file_name="personalized-messages.csv",
+                        mime="text/csv", use_container_width=True,
+                    )
+                with export_cols[1]:
+                    st.download_button(
+                        "Export JSON", data=export_json(export_leads), file_name="personalized-messages.json",
+                        mime="application/json", use_container_width=True,
+                    )
+
+    with right:
+        with st.container(border=True):
+            review_ids = {lead["id"] for lead in visible_leads}
+            chosen_id = st.session_state.get("review_lead_id")
+            if chosen_id not in review_ids:
+                chosen_id = next((lead["id"] for lead in visible_leads if lead.get("status") == "ready"), None)
+                if chosen_id is None and visible_leads:
+                    chosen_id = visible_leads[0]["id"]
+                if chosen_id is not None:
+                    st.session_state["review_lead_id"] = chosen_id
+            selected_lead = next((lead for lead in visible_leads if lead["id"] == chosen_id), None)
+            if selected_lead:
+                show_lead(selected_lead, settings)
+            else:
+                st.subheader("My Store")
+                st.caption("Select a lead to review its draft.")
 
 
 def show_lead(lead: dict, settings: dict) -> None:
