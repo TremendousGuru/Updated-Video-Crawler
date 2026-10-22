@@ -161,11 +161,13 @@ requests manual review.
 | Setting | Why |
 |---|---|
 | **Your name / company** | Used in the sign-off. Without it your emails end without a sender. |
-| **What you do** | The service description is connected to the selected product opportunity rather than used as a generic opener. |
-| **Video offer line** | Defaults to offering a storyboard for review; it does not claim a video has already been made. |
-| **Call to action** | Defaults to a low-pressure invitation to see a short storyboard. |
+| **Optional service detail** | Leave blank to keep the email focused on the product idea; custom text is included when set. |
+| **Optional video line** | Leave blank for product-led copy. A custom line is included only when set. |
+| **Call to action** | Defaults to an automatically selected, low-pressure question tailored to the product concept. |
 | **First subject idea** | Defaults to `a short video idea for {product}`; `{product}` is replaced with the selected product title. |
 | **Tone** | Defaults to warm, concise, specific, conversational wording without pressure or sales promises. |
+| **Seasonal context** | Automatic mode uses Christmas context from October 15 through December 24 only when it fits the product concept. Choose Christmas manually or turn it off. |
+| **Minimum product evidence score** | Defaults to 5/10. Product candidates below the threshold are skipped for manual review. |
 | **Opt-out line** | Keeps you on the right side of spam law and improves replies. Leave it on. |
 | **Stores at once** | Defaults to 3 to keep crawl concurrency modest. |
 | **Delay between requests** | Defaults to 0.75s. Raise it if a store starts refusing connections. |

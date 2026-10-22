@@ -195,19 +195,19 @@ def save_settings_form(settings: dict) -> None:
         sender_name = st.text_input("Your name", value=settings.get("sender_name", ""))
         sender_company = st.text_input("Company", value=settings.get("sender_company", ""))
         offer = st.text_input(
-            "What you do",
+            "Optional service detail",
             value=settings.get("offer", ""),
-            help="Describe your service plainly. The draft will connect it to one observed product opportunity.",
+            help="Leave blank to keep the email focused on the product idea.",
         )
         video_line = st.text_input(
-            "Video offer line",
+            "Optional video line",
             value=settings.get("video_line", ""),
-            help="Describe a possible next step. Avoid suggesting a sample video has already been made.",
+            help="Leave blank for product-led copy. A custom line is included only when set.",
         )
         cta = st.text_input(
             "Call to action",
             value=settings.get("cta", ""),
-            help="Keep the invitation low-pressure and tied to the storyboard or concept.",
+            help="Set to auto to choose a low-pressure question for the product concept.",
         )
         subject_hint = st.text_input(
             "First subject idea",
@@ -218,6 +218,18 @@ def save_settings_form(settings: dict) -> None:
             "Tone",
             value=settings.get("tone", ""),
             help="Guides AI-written drafts. Local drafts use a consistent concise, conversational style.",
+        )
+        seasonal_context = st.selectbox(
+            "Seasonal context",
+            options=["auto", "Christmas", "off"],
+            index=["auto", "Christmas", "off"].index(settings.get("seasonal_context", "auto"))
+            if settings.get("seasonal_context", "auto") in {"auto", "Christmas", "off"} else 0,
+            help="Automatic mode uses Christmas context in season only when it fits the product idea.",
+        )
+        min_product_score = st.slider(
+            "Minimum product evidence score", 0, 10,
+            int(settings.get("min_product_score", 5)),
+            help="Candidates below this score are skipped for manual review.",
         )
         optout = st.checkbox("Include opt-out line", value=bool(settings.get("optout", True)))
         optout_line = st.text_input("Opt-out line", value=settings.get("optout_line", ""))
@@ -245,6 +257,7 @@ def save_settings_form(settings: dict) -> None:
         db.save_settings({
             "sender_name": sender_name, "sender_company": sender_company, "offer": offer,
             "video_line": video_line, "cta": cta, "subject_hint": subject_hint, "tone": tone,
+            "seasonal_context": seasonal_context, "min_product_score": min_product_score,
             "optout": optout, "optout_line": optout_line, "base_url": base_url,
             "model": model, "use_ai": use_ai, "respect_robots": respect_robots,
             "find_missing_emails": find_missing_emails, "auto_compose": auto_compose,

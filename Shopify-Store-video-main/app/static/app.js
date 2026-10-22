@@ -38,28 +38,27 @@ function timeAgo(iso) {
 function renderTable() {
   const tb = $("#leadRows");
   if (!state.leads.length) {
-    tb.innerHTML = `<tr class="empty"><td colspan="6">No rows yet. Add a list above.</td></tr>`;
+    tb.innerHTML = `<tr class="empty"><td colspan="5">No leads yet. Upload a list below.</td></tr>`;
+    updateCounts();
     return;
   }
-  tb.innerHTML = state.leads.map((l) => {
+  const filter = $("#filterShow")?.value || "all";
+  const query = ($("#leadSearch")?.value || "").trim().toLowerCase();
+  const visible = state.leads.filter((l) => {
+    if (filter !== "all" && l.status !== filter) return false;
+    return !query || [l.store_name, l.domain, l.email].some((value) => String(value || "").toLowerCase().includes(query));
+  });
+  tb.innerHTML = visible.length ? visible.map((l) => {
     const sel = state.selected.has(l.id);
     const st = l.status || "pending";
-    const detail = [];
-    if (l.error) detail.push(`<span class="warn">${esc(l.error)}</span>`);
-    else if (l.engine) detail.push(esc(l.engine));
-    if (l.notes) detail.push("hook: " + esc(l.notes.slice(0, 70)));
-    if (l.has_facts) detail.push(`${(l.subjects || []).length} subject option${(l.subjects || []).length === 1 ? "" : "s"}`);
-    return `<tr data-id="${l.id}" class="${sel ? "selected" : ""}">
+    return `<tr data-id="${l.id}" class="${sel ? "selected" : ""} ${state.current === l.id ? "current" : ""}">
       <td class="c-chk"><input type="checkbox" class="rowchk" data-id="${l.id}" ${sel ? "checked" : ""}></td>
-      <td class="store-cell"><b>${esc(l.store_name || "—")}</b><span class="dom">${esc(l.domain || "")}</span></td>
-      <td class="email-cell" title="${esc(l.email)}">${esc(l.email || "<no email yet>")}</td>
+      <td class="store-cell">${esc(l.store_name || "—")}</td>
+      <td class="domain-cell" title="${esc(l.domain)}">${esc(l.domain || "—")}</td>
+      <td class="email-cell" title="${esc(l.email)}">${esc(l.email || "—")}</td>
       <td><span class="pill st-${st}">${STATUS_LABEL[st] || st}</span></td>
-      <td class="detail-cell">${detail.join(" · ")}</td>
-      <td class="c-act">
-        <button class="iconbtn" data-open="${l.id}" title="Open">Open</button>
-      </td>
     </tr>`;
-  }).join("");
+  }).join("") : `<tr class="empty"><td colspan="5">No leads match this view.</td></tr>`;
 
   $$("#leadRows .rowchk").forEach((c) =>
     c.addEventListener("change", () => {
@@ -68,8 +67,19 @@ function renderTable() {
       renderTable();
     })
   );
-  $$("#leadRows [data-open]").forEach((b) => b.addEventListener("click", () => openDrawer(+b.dataset.open)));
+  $$("#leadRows tr[data-id]").forEach((row) => row.addEventListener("click", (event) => {
+    if (event.target.closest("input")) return;
+    openDrawer(+row.dataset.id);
+  }));
   $("#selCount").textContent = `${state.selected.size} selected`;
+  updateCounts();
+}
+
+function updateCounts() {
+  $("#countAll").textContent = state.leads.length;
+  $("#countReady").textContent = state.leads.filter((l) => l.status === "ready").length;
+  $("#countSent").textContent = state.leads.filter((l) => l.status === "sent").length;
+  $("#countFailed").textContent = state.leads.filter((l) => l.status === "failed").length;
 }
 
 async function refresh() {
@@ -77,6 +87,11 @@ async function refresh() {
   state.leads = leads;
   const ids = new Set(leads.map((l) => l.id));
   state.selected = new Set([...state.selected].filter((i) => ids.has(i)));
+  if (!state.current && leads.length) {
+    const initial = leads.find((lead) => lead.status === "ready") || leads[0];
+    state.current = initial.id;
+    await loadDrawer(initial.id);
+  }
   renderTable();
 }
 
@@ -161,7 +176,7 @@ function listen(runId) {
 /* -------------------------------------------------------------- drawer */
 async function openDrawer(id) {
   state.current = id;
-  $("#drawerWrap").classList.remove("hidden");
+  renderTable();
   await loadDrawer(id);
 }
 
@@ -171,24 +186,25 @@ async function loadDrawer(id) {
   state.detail = l;
   $("#dStore").textContent = l.store_name || l.domain || `Row ${l.id}`;
   $("#dEmail").textContent = l.email || "no email address yet";
+  $("#draftStatus").textContent = STATUS_LABEL[l.status] || l.status || "review";
+  $("#draftStatus").className = `status-chip status-${l.status || "pending"}`;
+  const notice = $("#draftNotice");
+  if (l.error) {
+    notice.textContent = `Crawl issue: ${l.error}`;
+    notice.className = "draft-notice notice-error";
+  } else if (l.engine && /local|template/i.test(l.engine)) {
+    notice.textContent = `Draft composed locally${l.engine ? ` with ${l.engine}` : ""}. Review the store details before sending.`;
+    notice.className = "draft-notice notice-warn";
+  } else {
+    notice.textContent = "";
+    notice.className = "draft-notice hidden";
+  }
   $("#dSubject").value = l.subject || "";
   $("#dBody").value = l.body || "";
   $("#dCount").textContent = l.body ? `${(l.body.match(/\S+/g) || []).length} words · ${l.body.length} chars` : "";
   $("#dEngine").textContent = l.engine ? `written by ${l.engine}` : "";
   $("#dFlags").textContent = (l.flags || []).length ? "Notes: " + l.flags.join(" · ") : "";
   $("#dShot").textContent = l.notes ? `Hook used: ${l.notes}` : "";
-
-  const chips = $("#dSubjects");
-  const subs = l.subjects || [];
-  chips.innerHTML = subs.map((s) => `<span class="chip ${s === l.subject ? "on" : ""}" data-s="${esc(s)}">${esc(s)}</span>`).join("")
-    + (subs.length ? "" : `<span class="hint">No subject options yet — rewrite to generate some.</span>`);
-  $$("#dSubjects .chip").forEach((c) =>
-    c.addEventListener("click", () => {
-      $("#dSubject").value = c.dataset.s;
-      $$("#dSubjects .chip").forEach((x) => x.classList.toggle("on", x === c));
-      saveDraft(true);
-    })
-  );
 
   // Facts tab
   const f = l.facts && typeof l.facts === "object" ? l.facts : {};
@@ -225,8 +241,35 @@ async function loadDrawer(id) {
 }
 
 function closeDrawer() {
-  $("#drawerWrap").classList.add("hidden");
   state.current = null;
+  renderTable();
+}
+
+async function markSentAndNext() {
+  if (!state.current) { toast("Select a lead first.", true); return; }
+  const currentIndex = state.leads.findIndex((lead) => lead.id === state.current);
+  await api(`/api/leads/${state.current}`, {
+    method: "PATCH", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
+  });
+  const lead = state.leads.find((item) => item.id === state.current);
+  if (lead) lead.status = "sent";
+  const readyLeads = state.leads.filter((item) => item.status === "ready");
+  const next = readyLeads.find((item) => state.leads.indexOf(item) > currentIndex) || readyLeads[0];
+  if (next) {
+    state.current = next.id;
+    await loadDrawer(next.id);
+  } else {
+    state.current = null;
+    $("#dStore").textContent = "No more ready drafts";
+    $("#dEmail").textContent = "All ready leads have been reviewed";
+    $("#dSubject").value = "";
+    $("#dBody").value = "";
+    $("#draftStatus").textContent = "Complete";
+    $("#draftStatus").className = "status-chip";
+  }
+  renderTable();
+  toast("Marked as sent");
 }
 
 async function saveDraft(silent = false) {
@@ -260,14 +303,7 @@ async function sendVia(kind) {
   await saveDraft(true);
   const url = kind === "gmail" ? gmailUrl(to, subject, body) : mailtoUrl(to, subject, body);
   window.open(url, kind === "gmail" ? "_blank" : "_self");
-  await api(`/api/leads/${state.current}`, {
-    method: "PATCH", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
-  });
-  const l = state.leads.find((x) => x.id === state.current);
-  if (l) l.status = "sent";
-  renderTable();
-  toast("Marked as sent. Update the row if you ended up not sending it.");
+  toast("Draft opened. Mark it sent after you send the message.");
 }
 
 /* -------------------------------------------------------------- settings */
@@ -279,6 +315,7 @@ async function loadSettings() {
     s_video_line: "video_line", s_cta: "cta", s_subject_hint: "subject_hint", s_tone: "tone",
     s_optout_line: "optout_line", s_base_url: "base_url", s_model: "model",
     s_concurrency: "concurrency", s_request_delay: "request_delay", s_max_pages: "max_pages",
+    s_seasonal_context: "seasonal_context", s_min_product_score: "min_product_score",
   };
   for (const [id, key] of Object.entries(map)) {
     const el = $("#" + id);
@@ -312,6 +349,8 @@ async function saveSettings() {
     base_url: $("#s_base_url").value, model: $("#s_model").value,
     concurrency: +$("#s_concurrency").value || 4, request_delay: +$("#s_request_delay").value || 0,
     max_pages: +$("#s_max_pages").value || 5,
+    seasonal_context: $("#s_seasonal_context").value,
+    min_product_score: Math.max(0, Math.min(10, Number($("#s_min_product_score").value) || 0)),
     optout: $("#s_optout").checked, use_ai: $("#s_use_ai").checked,
     respect_robots: $("#s_respect_robots").checked, find_missing_emails: $("#s_find_missing_emails").checked,
     auto_compose: $("#s_auto_compose").checked,
@@ -327,7 +366,9 @@ async function saveSettings() {
 
 /* -------------------------------------------------------------- wiring */
 function init() {
-  $("#btnSettings").addEventListener("click", async () => { await loadSettings(); $("#settingsModal").classList.remove("hidden"); });
+  const openSettings = async () => { await loadSettings(); $("#settingsModal").classList.remove("hidden"); };
+  $("#btnSettings").addEventListener("click", openSettings);
+  $("#btnTopSettings").addEventListener("click", openSettings);
   $$("[data-close]").forEach((b) => b.addEventListener("click", () => $("#settingsModal").classList.add("hidden")));
   $$("[data-close-drawer]").forEach((b) => b.addEventListener("click", closeDrawer));
   $("#btnSaveSettings").addEventListener("click", saveSettings);
@@ -390,6 +431,12 @@ function init() {
     ].join("\n");
     toast("Example list loaded — now hit “Add pasted rows”.");
   });
+  $("#navUpload").addEventListener("click", () => { $("#panelUpload").open = true; $("#panelUpload").scrollIntoView({ behavior: "smooth", block: "nearest" }); });
+  $("#navAddStores").addEventListener("click", () => { $("#panelUpload").open = true; $("#panelUpload").scrollIntoView({ behavior: "smooth", block: "nearest" }); });
+  $("#btnExport").addEventListener("click", () => { window.location.href = "/api/export.csv?scope=ready"; });
+  $("#btnSearch").addEventListener("click", () => { $("#leadSearch").classList.toggle("hidden"); $("#leadSearch").focus(); });
+  $("#leadSearch").addEventListener("input", renderTable);
+  $("#filterShow").addEventListener("change", renderTable);
 
   // runs
   $("#btnCrawl").addEventListener("click", () => startRun({ statuses: scopeStatuses(), redownload: $("#scopeSelect").value === "all" }));
@@ -420,16 +467,7 @@ function init() {
     await navigator.clipboard.writeText(`Subject: ${$("#dSubject").value}\n\n${$("#dBody").value}`);
     toast("Subject and body copied");
   });
-  $("#btnMarkSent").addEventListener("click", async () => {
-    await api(`/api/leads/${state.current}`, {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "sent", sent_at: new Date().toISOString() }),
-    });
-    const l = state.leads.find((x) => x.id === state.current);
-    if (l) l.status = "sent";
-    renderTable();
-    toast("Marked as sent");
-  });
+  $("#btnMarkSent").addEventListener("click", markSentAndNext);
   $("#btnRegen").addEventListener("click", async () => {
     await saveDraft(true);
     const r = await api(`/api/leads/${state.current}/compose`, { method: "POST" });

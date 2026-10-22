@@ -1,6 +1,7 @@
 import os
 import sys
 import asyncio
+from datetime import date
 
 import pytest
 
@@ -414,6 +415,252 @@ def test_quality_gate_rejects_generic_message_with_only_product_name():
     assert "message does not explain the selected concept" in result["review_reasons"]
 
 
+def test_quality_gate_rejects_copied_description_and_optout_is_preserved():
+    facts = {
+        "products": [{
+            "title": "Caramel Coffee",
+            "type": "Coffee",
+            "description": "Medium roast coffee with caramel flavor made for everyday brewing and serving at home.",
+        }],
+    }
+    product = facts["products"][0]
+    brief = {"concept": "Show the coffee being brewed and served in a morning ritual.", "format": "coffee ritual"}
+    copied = compose_mod.validate_outreach_personalization(
+        {
+            "subject": "Coffee video idea",
+            "message": "Caramel Coffee could be shown in a morning ritual. Medium roast coffee with caramel flavor made for everyday brewing and serving at home. Would you like to see it?",
+        },
+        facts,
+        product,
+        brief,
+    )
+    assert copied["manual_review_required"] is True
+    assert "message copies a long phrase from the product description" in copied["review_reasons"]
+
+    generated = compose_mod.generate_outreach_message(
+        {"store_name": "Morning House"},
+        {"brand_name": "Morning House"},
+        {"primary_opportunity": "A coffee ritual", "opportunity_category": "food_drink_ritual"},
+        product,
+        {"optout": True, "optout_line": "Reply no if you would rather not hear from me."},
+        {"concept": brief["concept"], "seasonal_context": "", "format": "coffee ritual"},
+    )
+    assert generated["message"].endswith("Reply no if you would rather not hear from me.")
+    assert generated["message"].count("Reply no if you would rather not hear from me.") == 1
+
+
+def test_quality_gate_rejects_unverified_christmas_delivery_promise():
+    product = {
+        "title": "Arcana Collector Card Pack",
+        "type": "Collectible Cards",
+        "description": "Pre-order. Expected to ship November 18, 2026.",
+    }
+    result = compose_mod.validate_outreach_personalization(
+        {
+            "subject": "Card pack video idea",
+            "message": "Arcana Collector Card Pack could have a fun reveal. I pictured a close shot of the pack, then a quick look through the cards, with the date on screen. It could arrive by Christmas and make a great gift. Would you like to see the concept?",
+        },
+        {"products": [product]},
+        product,
+        {"concept": "Hold on the card pack, then reveal the cards.", "seasonal_context": "Christmas"},
+    )
+
+    assert result["manual_review_required"] is True
+    assert "message contains unsupported or performance claims" in result["review_reasons"]
+
+
+def test_local_outreach_uses_distinct_seasonal_product_concepts():
+    scenarios = [
+        ({
+            "store_name": "Arcana Cards",
+            "domain": "arcana.example",
+            "product_types": ["Collectible Cards"],
+            "products": [{
+                "title": "Arcana Collector Card Pack",
+                "type": "Collectible Cards",
+                "description": "Pre-order now. Expected to ship November 18, 2026. Includes a collection of illustrated cards.",
+                "image": True,
+                "image_urls": ["https://cdn.example/cards.jpg"],
+            }],
+        }, ["pack", "cards", "november", "christmas"]),
+        ({
+            "store_name": "Morning House",
+            "domain": "morning.example",
+            "product_types": ["Coffee"],
+            "products": [{
+                "title": "Medium Roast Caramel Coffee",
+                "type": "Coffee",
+                "description": "Medium roast coffee with caramel flavor, made for everyday brewing and serving.",
+                "image": True,
+            }],
+        }, ["caramel", "pour", "christmas"]),
+        ({
+            "store_name": "Night Sky",
+            "domain": "nightsky.example",
+            "product_types": ["Lighting"],
+            "products": [{
+                "title": "Star Projector Night Light",
+                "type": "Lighting",
+                "description": "Projects stars across the ceiling as a soft night light for a bedroom.",
+                "image": True,
+            }],
+        }, ["ceiling", "stars", "christmas"]),
+        ({
+            "store_name": "Black Chapel",
+            "domain": "blackchapel.example",
+            "product_types": ["Clothing"],
+            "products": [{
+                "title": "Gothic Graphic Hoodie",
+                "type": "Clothing",
+                "description": "",
+                "image": True,
+            }],
+        }, ["gothic", "graphic", "outfit", "christmas"]),
+    ]
+    messages = []
+    banned_phrases = (
+        "i saw ", "its page says", "that gave me an idea", "premium product showcase",
+        "i create short, product-specific videos", "would a short storyboard be useful",
+    )
+
+    for facts, required_terms in scenarios:
+        result = asyncio.run(compose_mod.compose(
+            facts,
+            {"use_ai": False, "seasonal_context": "Christmas"},
+        ))
+        message = result["body"]
+        lowered = message.lower()
+        messages.append(message)
+        assert result["manual_review_required"] is False
+        assert 40 <= len(message.split()) <= 95
+        assert all(term in lowered for term in required_terms)
+        assert not any(phrase in lowered for phrase in banned_phrases)
+        description = facts["products"][0].get("description", "")
+        assert not description or description not in message
+
+    assert len(set(messages)) == 4
+    assert "deliver by christmas" not in messages[0].lower()
+    assert "arrive by christmas" not in messages[0].lower()
+
+
+def test_seasonal_context_can_be_disabled_for_local_outreach():
+    facts = {
+        "store_name": "Morning House",
+        "domain": "morning.example",
+        "product_types": ["Coffee"],
+        "products": [{
+            "title": "Medium Roast Caramel Coffee",
+            "type": "Coffee",
+            "description": "Medium roast coffee with caramel flavor, made for everyday brewing and serving.",
+            "image": True,
+        }],
+    }
+
+    result = asyncio.run(compose_mod.compose(facts, {"use_ai": False, "seasonal_context": "off"}))
+
+    assert result["manual_review_required"] is False
+    assert "christmas" not in result["body"].lower()
+
+    card_facts = {
+        "store_name": "Arcana Cards",
+        "domain": "arcana.example",
+        "product_types": ["Collectible Cards"],
+        "products": [{
+            "title": "Arcana Collector Card Pack",
+            "type": "Collectible Cards",
+            "description": "Pre-order. Expected to ship November 18, 2026.",
+            "image": True,
+        }],
+    }
+    card_result = asyncio.run(compose_mod.compose(card_facts, {"use_ai": False, "seasonal_context": "off"}))
+    assert "november 18, 2026" in card_result["body"].lower()
+    assert "christmas" not in card_result["body"].lower()
+
+
+def test_product_minimum_score_is_configurable_for_skip_results():
+    facts = {
+        "store_name": "Everyday Goods",
+        "domain": "everyday.example",
+        "products": [{
+            "title": "Everyday Canvas Tote Bag",
+            "url": "https://everyday.example/products/tote",
+            "description": "",
+            "image": True,
+        }],
+    }
+
+    result = asyncio.run(compose_mod.compose(
+        facts,
+        {"use_ai": False, "min_product_score": 10},
+    ))
+
+    assert result["body"] == ""
+    assert result["manual_review_required"] is True
+    assert result["intelligence"]["product_selection"]["selection_status"] == "deprioritized"
+
+
+def test_automatic_seasonal_context_is_date_aware_and_configurable():
+    assert compose_mod.seasonal_context_for({}, date(2026, 10, 22)) == "Christmas"
+    assert compose_mod.seasonal_context_for({}, date(2026, 9, 30)) == ""
+    assert compose_mod.seasonal_context_for({"seasonal_context": "off"}, date(2026, 12, 1)) == ""
+    assert compose_mod.seasonal_context_for({"seasonal_context": "Spring"}, date(2026, 12, 1)) == "Spring"
+
+
+def test_intelligent_prompt_includes_variants_but_not_image_urls():
+    facts = {
+        "products": [{
+            "title": "Graphic Hoodie",
+            "image": True,
+            "image_urls": ["https://cdn.example/private-image.jpg"],
+            "variants": [{"title": "Black / Large", "options": ["Black", "Large"]}],
+        }],
+    }
+
+    prompt = compose_mod.build_intelligent_outreach_prompt(
+        facts,
+        {},
+        {},
+        {"product_name": "Graphic Hoodie"},
+        {},
+        {},
+    )
+
+    assert "Black" in prompt and "Large" in prompt
+    assert '"image_reference_available": true' in prompt
+    assert "private-image.jpg" not in prompt
+    assert "not visually analyzed" in prompt
+
+
+def test_explicit_sample_video_is_used_instead_of_a_hypothetical_offer():
+    facts = {
+        "store_name": "Morning House",
+        "sample_video_url": "https://samples.example/caramel-coffee.mp4",
+        "products": [{
+            "title": "Caramel Coffee",
+            "type": "Coffee",
+            "description": "Medium roast coffee with caramel flavor.",
+        }],
+    }
+    product = facts["products"][0]
+    prompt = compose_mod.build_intelligent_outreach_prompt(
+        facts, {}, {}, {"product_name": "Caramel Coffee"}, {}, {},
+    )
+    generated = compose_mod.generate_outreach_message(
+        facts,
+        {"brand_name": "Morning House"},
+        {"primary_opportunity": "A coffee ritual", "opportunity_category": "food_drink_ritual"},
+        product,
+        {},
+        {"concept": "Show the coffee being brewed and served.", "format": "coffee ritual"},
+    )
+
+    assert '"sample_video_reference": "https://samples.example/caramel-coffee.mp4"' in prompt
+    assert "https://samples.example/caramel-coffee.mp4" in generated["message"]
+    assert "Would you like to see the sample?" in generated["message"]
+    assert "storyboard" not in generated["message"].lower()
+    assert compose_mod._sample_video_reference({}, {"sample_video_url": "javascript:alert(1)"}) == ""
+
+
 def test_shopify_product_extraction_keeps_details_and_video_source():
     products = extract_products([{
         "title": "Clamp-On Task Light",
@@ -524,9 +771,11 @@ def test_local_fallback_runs_without_api_key(monkeypatch):
     assert result["body"]
     assert "Clamp-On Task Light" in result["body"]
     assert "clamp" in result["body"].lower()
-    assert "I create short, product-specific videos" in result["body"]
-    assert "short concept around it" in result["body"]
-    assert result["subjects"] == ["a short video idea for Clamp-On Task Light"]
+    assert "i create short, product-specific videos" not in result["body"].lower()
+    assert "short concept around it" not in result["body"].lower()
+    assert "its page says" not in result["body"].lower()
+    assert "that gave me an idea" not in result["body"].lower()
+    assert result["subjects"] == ["a video idea for Clamp-On Task Light"]
 
 
 def test_ai_failure_uses_local_fallback_and_exposes_reason(monkeypatch):
@@ -563,10 +812,12 @@ def test_new_defaults_and_legacy_default_migration(tmp_path, monkeypatch):
 
     initial = db.load_settings()
 
-    assert initial["offer"].startswith("I create short, product-specific videos")
-    assert initial["video_line"] == "I can sketch out a short concept around it."
-    assert initial["cta"] == "Would a short storyboard be useful?"
+    assert initial["offer"] == ""
+    assert initial["video_line"] == ""
+    assert initial["cta"] == "auto"
     assert initial["subject_hint"] == "a short video idea for {product}"
+    assert initial["seasonal_context"] == "auto"
+    assert initial["min_product_score"] == 5
     assert initial["tone"].startswith("Warm, concise, specific")
     assert initial["max_pages"] == 10
     assert initial["concurrency"] == 3
@@ -584,6 +835,11 @@ def test_new_defaults_and_legacy_default_migration(tmp_path, monkeypatch):
     assert migrated["video_line"] == db.DEFAULTS["video_line"]
     assert migrated["cta"] == db.DEFAULTS["cta"]
     assert migrated["subject_hint"] == db.DEFAULTS["subject_hint"]
+
+    db.save_settings({"seasonal_context": "off", "min_product_score": 7})
+    configured = db.load_settings()
+    assert configured["seasonal_context"] == "off"
+    assert configured["min_product_score"] == 7
 
     db.save_settings({"offer": "I produce short documentary-style product films."})
     assert db.load_settings()["offer"] == "I produce short documentary-style product films."

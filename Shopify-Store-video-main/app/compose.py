@@ -5,21 +5,12 @@ import json
 import random
 import re
 import textwrap
+from datetime import date
 
 import httpx
 
-SYSTEM_PROMPT = """You write cold outreach emails for an independent creator who makes short product videos for small e-commerce brands.
-
-Voice: how a real person types a quick message. Short sentences. Concrete nouns. No marketing voice.
-
-Hard rules:
-- Never invent facts. Only use details from the FACTS block. If something isn't there, don't mention it.
-- Never say you bought, own, use or have tried the product. You're writing as a stranger who looked at their site.
-- Never use placeholders like [Name], [Company], {product} or "insert X".
-- No markdown, no bullets, no links, no emoji, no em dashes.
-- Banned openers/phrases: "I hope this email finds you well", "I came across your website", "I wanted to reach out", "I am reaching out", "in today's fast-paced", "as a business owner", "I noticed that you", "elevate", "seamless", "leverage".
-- Don't compliment vaguely ("amazing brand", "great products"). Compliments must point at a specific, checkable detail.
-- Plain text email body, 70-120 words, plus a sign-off."""
+SYSTEM_PROMPT = """You are an independent creative freelancer writing a first email to a store owner about one specific product video idea.
+Use natural, conversational English and short sentences. Before writing, identify one verified product detail, why it can make a useful visual story, and one concrete 15-30 second scene. Treat the scene as a proposal, not as a feature already present. Use a seasonal angle only when a season is supplied and fits the product. Write about 45-80 words, with one low-pressure question. Product descriptions are evidence, not copy to paste. Do not infer product appearance from image URLs. Never invent features, materials, dates, benefits, customer reactions, sales, popularity, or outcomes. For expected ship dates, do not imply guaranteed holiday delivery. Vary the opening and rhythm based on the product; do not use a fixed email structure or rotate stock templates. Avoid 'I saw this on your site', 'its page says', 'that gave me an idea', generic service introductions, empty praise, corporate language, pressure, and em dashes. Do not claim a video or storyboard already exists unless facts confirm it. If no specific creative concept is supported, return an empty body and require manual review."""
 
 
 def build_facts_block(facts: dict) -> str:
@@ -54,14 +45,27 @@ def build_facts_block(facts: dict) -> str:
 
     prods = (f.get("products") or [])[:8]
     if prods:
-        lines.append("Products (pick ONE of these to reference, by its exact title):")
+        lines.append("Products (choose at most one product with useful, verified detail):")
         for p in prods:
-            bits = [display_product(p.get("title", ""))]
+            bits = [f"Title: {display_product(p.get('title', ''))}"]
             if p.get("price"):
-                bits.append(f"({p.get('price')})")
+                bits.append(f"Price: {p.get('price')}")
             if p.get("type"):
-                bits.append(f"[{p.get('type')}]")
-            lines.append("  - " + " ".join(b for b in bits if b))
+                bits.append(f"Category: {p.get('type')}")
+            if p.get("tags"):
+                bits.append(f"Tags: {', '.join(str(tag) for tag in p['tags'][:6])}")
+            if p.get("description"):
+                bits.append(f"Description evidence (paraphrase; do not quote): {textwrap.shorten(str(p['description']), width=500, placeholder=' ...')}")
+            variants = [
+                str(option)
+                for variant in (p.get("variants") or [])[:8]
+                for option in (variant.get("options") or [])
+                if option
+            ]
+            if variants:
+                bits.append(f"Variant options: {', '.join(dict.fromkeys(variants))}")
+            bits.append(f"Product image reference available: {'yes' if p.get('image_urls') or p.get('image') else 'no'}; image appearance has not been analyzed")
+            lines.append("  - " + "\n    ".join(bits))
 
     if f.get("about_snippet"):
         lines.append("About page excerpt (verbatim, do not quote at length):")
@@ -77,7 +81,7 @@ def build_facts_block(facts: dict) -> str:
 def build_user_prompt(digest: str, settings: dict, store_hint: str, subject_hint: str) -> str:
     sender = settings.get("sender_name") or "the sender"
     company = settings.get("sender_company") or ""
-    offer = settings.get("offer") or "makes short product videos for Shopify stores"
+    offer = settings.get("offer") or ""
     video_line = settings.get("video_line") or "I already put together a short video for one of your products"
     cta = settings.get("cta") or "Want me to send it over?"
     tone = settings.get("tone") or "friendly, direct"
@@ -89,24 +93,19 @@ def build_user_prompt(digest: str, settings: dict, store_hint: str, subject_hint
 
     company_line = f"\n- Sign off as {sender}{(' from ' + company) if company else ''}." if sender else ""
 
+    seasonal = seasonal_context_for(settings)
     return f"""FACTS about the store (this is all you know):
 {digest}
 
-WRITE ONE EMAIL.
+Creative brief: select one product-specific observation from the evidence. Privately work out why that detail could interest the product's intended customer, then propose one concrete 15-30 second visual scene that fits its category. Do not expose analysis in the email. Seasonal context: {seasonal or "none"}. If present, use it only when it naturally fits; never turn an expected shipping date into a delivery guarantee.
 
-Structure:
-1. Greeting. Use the founder's first name only if a founder name is listed above; otherwise "Hi {store_hint} team," or "Hi there,".
-2. One or two sentences that prove a human actually looked at their site: name a specific product, or a specific detail from their about page, their categories, or a brand signal. Be plain about it.
-3. One sentence of who you are and what you do ({offer}).
-4. One sentence framing the video: {video_line}. You have NOT sent it and there is NO link.
-5. CTA: {cta}
-6. Sign-off. Tone: {tone}.{company_line}{optout}
+Write one individualized email to {store_hint}. Do not force a fixed sequence of observation, service pitch, and CTA. Lead with the scene or the meaningful product detail, whichever sounds more natural. Paraphrase the evidence; do not copy product descriptions. Use only extracted facts for claims. Clearly keep proposed scenes hypothetical. Use this offer only if it helps the note sound natural: {offer}. Video line, if genuinely useful: {video_line}. CTA preference: {cta} (when set to auto or blank, choose a relaxed, product-appropriate question). Tone: {tone}.{company_line}{optout}
+
+Keep the body around 45-80 words. No stock intro, generic service pitch, empty compliment, manipulative curiosity, unnecessary explanation, or em dash. Do not claim a sample exists unless the facts say so.
 
 SUBJECT LINES: give exactly 3 options.
-- Option 1: a short lowercase curiosity question about the store being active, in the spirit of "{subject_hint}". Keep it plain and a little blunt, e.g. "is <store> still running".
-- Option 2: specific to the product or niche you referenced, also lowercase, under 7 words.
-- Option 3: a plain spoken sentence-case question about the video, under 7 words.
-Style note: {subject_style}.
+- Keep all three short and specific to the product idea. Do not use a store-active question.
+- Follow this subject preference if it fits: "{subject_hint}". Style note: {subject_style}.
 
 Return ONLY valid JSON, no code fences:
 {{"subjects": ["...", "...", "..."], "body": "...", "hook": "the exact detail you referenced", "angle": "3-6 word label"}}"""
@@ -588,6 +587,67 @@ def _known_video_assets(product: dict, facts: dict) -> list[dict]:
     return list(assets) if isinstance(assets, list) else []
 
 
+def seasonal_context_for(settings: dict | None = None, today: date | None = None) -> str:
+    settings = settings or {}
+    requested = str(settings.get("seasonal_context") or "auto").strip()
+    if requested.lower() in {"off", "none", "disabled", "false"}:
+        return ""
+    if requested.lower() not in {"", "auto", "automatic"}:
+        return requested
+    current = today or date.today()
+    if (current.month == 10 and current.day >= 15) or current.month == 11 or (current.month == 12 and current.day <= 24):
+        return "Christmas"
+    return ""
+
+
+def _expected_shipping_detail(product: dict) -> str:
+    description = re.sub(r"\s+", " ", str(product.get("description") or "")).strip()
+    cue = re.search(
+        r"\b(?:expected(?:\s+to)?\s+ship|expected\s+shipping(?:\s+date)?|shipping\s+expected|ships?\s+(?:on|by|around))\b",
+        description,
+        re.I,
+    )
+    if not cue:
+        return ""
+    date_match = re.search(
+        r"\b(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:tember)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{1,2}(?:st|nd|rd|th)?(?:,?\s+\d{4})?|\b\d{4}-\d{2}-\d{2}\b",
+        description[cue.end():cue.end() + 80],
+        re.I,
+    )
+    if not date_match:
+        return ""
+    return f"{cue.group(0)} {date_match.group(0)}".strip()
+
+
+def _seasonal_direction(context: str, diagnosis: dict, product: dict) -> str:
+    if not context:
+        return ""
+    category = diagnosis.get("opportunity_category") or ""
+    if category == "collectible_reveal":
+        shipping = _expected_shipping_detail(product)
+        if not shipping:
+            return ""
+        return f"For {context} planning, the listed ship date can be a quiet preorder detail, not a promise of holiday delivery."
+    if category == "food_drink_ritual":
+        return f"A {context}-season morning coffee ritual gives the flavor a simple setting without adding product claims."
+    if category == "visual_transformation":
+        return f"A {context} gift-style reveal can move from an ordinary ceiling to the projected stars."
+    if category == "apparel_styling":
+        return f"A {context}-season styling sequence can let the graphic lead, then pull back to the full outfit."
+    return ""
+
+
+def _sample_video_reference(facts: dict, product: dict) -> str:
+    value = (
+        product.get("sample_video_url") or product.get("sample_video")
+        or (facts or {}).get("sample_video_url") or (facts or {}).get("sample_video")
+    )
+    if isinstance(value, dict):
+        value = value.get("url")
+    reference = str(value or "").strip()
+    return reference if reference.startswith(("https://", "http://")) else ""
+
+
 def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     title = str(product.get("title") or "").strip()
     product_type = str(product.get("type") or "").strip()
@@ -629,6 +689,8 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
         }
 
     lower = f"{title} {product_type} {' '.join(tags)} {description}".lower()
+    product_identity = f"{title} {product_type} {' '.join(tags)}".lower()
+    shipping_detail = _expected_shipping_detail(product)
     evidence = [{"fact": title, "source_url": source_url, "evidence_type": "observed"}]
     if product_type:
         evidence.append({"fact": product_type, "source_url": source_url, "evidence_type": "observed"})
@@ -689,6 +751,52 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
     evidence_strength = 0
     opportunity_category = ""
 
+    if re.search(r"\b(card pack|collectible card|trading card|booster pack|tcg)\b", lower):
+        format_name = "collectible card reveal"
+        concept = "Hold on the card pack for a beat, then reveal the cards one by one."
+        if shipping_detail:
+            concept += f" End with the listed timing as a small text cue: {shipping_detail}."
+        opportunity_category = "collectible_reveal"
+        opportunity = "The collectible format supports a reveal built around anticipation"
+        reason = "The product title or category identifies collectible cards, and the proposed reveal uses that format without inventing card contents."
+        confidence = 0.8
+        evidence_strength = 2
+
+    food_product = re.search(r"\b(coffee|espresso|tea|cocoa|hot chocolate|drink|beverage)\b", product_identity)
+    described_food_product = re.search(r"\b(medium|dark|light) roast\b|\bcoffee beans\b|\bcoffee with [\w-]+ flavor\b|\btea blend\b", description, re.I)
+    if not concept and (food_product or described_food_product):
+        format_name = "food and drink ritual"
+        flavor = next((term for term in ("caramel", "vanilla", "hazelnut", "mocha", "cinnamon") if term in lower), "")
+        concept = "Start with the first pour, follow it into the cup, and close on the drink beside its package."
+        if flavor:
+            concept += f" Use {flavor} as a short on-screen flavor cue."
+        opportunity_category = "food_drink_ritual"
+        opportunity = "A preparation or serving moment is a natural visual story for this food or drink"
+        reason = "The product title or category identifies a food or drink, and the proposed preparation scene does not claim an unverified taste or outcome."
+        confidence = 0.78
+        evidence_strength = 2
+
+    if not concept and re.search(r"\bstar\s+projector|projector.{0,30}\b(star|galaxy|night light)", lower):
+        format_name = "visual room transformation"
+        concept = "Begin on an ordinary ceiling, switch on the projector, then let the stars fill the frame before cutting back to the light."
+        opportunity_category = "visual_transformation"
+        opportunity = "The named projection effect creates a clear before-and-after visual"
+        reason = "The product name or description explicitly identifies star projection, which supports the proposed visual transition."
+        confidence = 0.84
+        evidence_strength = 2
+
+    if not concept and re.search(r"\b(hoodie|shirt|tee|t-shirt|jacket|sweatshirt|dress|coat|apparel|clothing)\b", lower):
+        format_name = "apparel styling sequence"
+        if re.search(r"\b(graphic|print|gothic|illustration|artwork)\b", lower):
+            concept = "Open tight on the graphic, pull back to the full garment, then show it in motion with a simple outfit."
+        else:
+            concept = "Show a quick transition from the garment on its own to a complete outfit, then let the fabric move."
+        opportunity_category = "apparel_styling"
+        opportunity = "The apparel category supports a simple styling or movement sequence"
+        reason = "The product title or category identifies a wearable item, and the proposed scene is a creative direction rather than a claim about its features."
+        confidence = 0.72
+        evidence_strength = 2
+
     if assets and audited_video_gap:
         format_name = str(video_audit.get("recommended_format") or "distinct short-form video angle")
         concept = distinct_video_angle
@@ -730,9 +838,8 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
 
     positioning = str(profile.get("brand_positioning") or "").lower()
     if not concept and description and re.search(r"\b(premium|luxury|luxurious)\b", positioning):
-        detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
         format_name = "premium product showcase"
-        concept = f"Use close-ups to present {title} and the stated detail “{detail}”, without adding unsupported quality claims."
+        concept = f"Move from a full view of {title} to a close-up of one verified product detail, then return to the complete item."
         opportunity_category = "premium_product_presentation"
         opportunity = "The stated premium positioning could be paired with a more detailed product showcase"
         reason = "The store positioning explicitly uses premium language, and the product page supplies a concrete detail that can be shown."
@@ -806,12 +913,12 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
             break
 
     lifestyle_cues = (
-        ("evening routine", f"Place {title} in a simple evening routine, with a small text cue for the warm cedar scent named in its description."),
-        ("morning routine", "Build a short morning scene around the product, using the routine and product details stated in its description as the creative cues."),
+        ("evening routine", "Place the product into a short evening routine using only the details stated on its page."),
+        ("morning routine", "Build a short morning scene around the product and its stated use."),
         ("outdoor", "Show the product in the outdoor context explicitly named in its product details."),
-        ("hiking", "Show the product as part of a hiking preparation scene, sticking to the use and features named in its product details."),
-        ("travel", "Build a short packing or travel scene around the product, using only the travel use described on its page."),
-        ("gift", "Frame the product as a considered gift, using its real packaging or product imagery as references if available."),
+        ("hiking", "Show the product as part of a hiking preparation scene, sticking to the use and features named on its page."),
+        ("travel", "Build a short packing or travel scene around the use described on its page."),
+        ("gift", "Frame the product as a gift, using only packaging details confirmed by the store."),
     )
     if not concept:
         for cue, candidate_concept in lifestyle_cues:
@@ -854,17 +961,13 @@ def _candidate_plan(product: dict, facts: dict, profile: dict) -> dict:
             evidence_strength = 2
 
     if not concept and description and len(description.split()) >= 8:
-        # A useful creative idea still needs an identifiable attribute/use case to build on.
-        sentences = re.split(r"(?<=[.!?])\s+", description)
-        detail = next((sentence.strip() for sentence in sentences if len(sentence.split()) >= 5), "")
-        if detail:
-            format_name = "product detail video"
-            concept = f"Use a close-up product story to bring this page detail to life: {detail}"
-            opportunity_category = "product_detail_or_benefit"
-            opportunity = "A product-specific detail can anchor a focused video concept"
-            reason = "The product description includes a concrete detail that can be translated into visuals; no customer difficulty is inferred."
-            confidence = 0.62
-            evidence_strength = 2
+        format_name = "product detail video"
+        concept = f"Open on {title}, isolate one concrete detail from its page as a brief visual cue, then return to the whole product."
+        opportunity_category = "product_detail_or_benefit"
+        opportunity = "A product-specific detail can anchor a focused video concept"
+        reason = "The product description includes a concrete detail that can be translated into visuals; no customer difficulty is inferred."
+        confidence = 0.62
+        evidence_strength = 2
 
     if not concept:
         return {
@@ -1023,7 +1126,8 @@ def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan
         category in {
             "product_education", "purchase_confidence", "benefit_communication", "lifestyle_or_use_case",
             "brand_story_or_craftsmanship", "existing_video_fresh_angle", "social_content_variety",
-            "premium_product_presentation", "product_detail_or_benefit",
+            "premium_product_presentation", "product_detail_or_benefit", "collectible_reveal",
+            "food_drink_ritual", "visual_transformation", "apparel_styling",
         }
         and specific_detail
     ) else (
@@ -1031,6 +1135,7 @@ def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan
     )
     visual = 2 if (
         category == "premium_product_presentation" and p.get("image") and specific_detail
+        or category in {"collectible_reveal", "food_drink_ritual", "visual_transformation", "apparel_styling"}
         or
         re.search(r"\b(show|use|wear|fit|clamp|install|apply|adjust|pour|assemble|routine|hiking|travel|heating|copper|core|walnut|scent|handmade|craftsmanship|small[- ]batch)\b", f"{title} {description} {p.get('type', '')}", re.I)
         or re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", title, re.I)
@@ -1067,7 +1172,9 @@ def score_product_candidate(product: dict, profile: dict, diagnosis: dict, _plan
     }
 
 
-def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> dict:
+def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict, settings: dict | None = None) -> dict:
+    settings = settings or {}
+    minimum_score = max(0, min(10, int(_as_float(settings.get("min_product_score"), 5))))
     products = facts.get("products") or []
     ranked = []
     for product in products:
@@ -1076,10 +1183,10 @@ def pick_primary_product(facts: dict, store_profile: dict, diagnosis: dict) -> d
             ranked.append({"product": product, "plan": plan})
     ranked.sort(key=lambda item: item["plan"].get("score", 0), reverse=True)
     top_score = ranked[0]["plan"].get("score", 0) if ranked else 0
-    if not ranked or top_score < 5:
+    if not ranked or top_score < minimum_score:
         selection_status = "deprioritized"
         selection_reason = (
-            f"The strongest candidate scored {top_score}/10 and is below the minimum draft threshold."
+            f"The strongest candidate scored {top_score}/10, below the configured minimum of {minimum_score}/10."
         )
         return {
             "product_name": "",
@@ -1119,6 +1226,9 @@ def build_video_brief(facts: dict, store_profile: dict, diagnosis: dict, product
     if not diagnosis.get("primary_opportunity") or not product_name:
         return {"format": "", "objective": "", "duration_seconds": 0, "hook": "", "concept": "", "scenes": [], "key_benefit": "", "cta": "", "restrictions": []}
     concept = diagnosis.get("concept") or ""
+    seasonal_direction = diagnosis.get("seasonal_direction") or ""
+    if seasonal_direction:
+        concept = f"{concept} {seasonal_direction}".strip()
     source_url = str(product.get("url") or facts.get("url") or "")
     description = re.sub(r"\s+", " ", str(product.get("description") or "")).strip()
     detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
@@ -1139,6 +1249,8 @@ def build_video_brief(facts: dict, store_profile: dict, diagnosis: dict, product
         "duration_seconds": 20,
         "hook": concept,
         "concept": concept,
+        "seasonal_context": diagnosis.get("seasonal_context") or "",
+        "seasonal_direction": seasonal_direction,
         "scenes": scenes,
         "key_benefit": "Make the verified product detail or use case easier to see and understand.",
         "cta": "Explore the product.",
@@ -1163,6 +1275,7 @@ def _concept_terms(text: str) -> list[str]:
 
 def validate_outreach_personalization(outreach: dict, facts: dict, product: dict, video_brief: dict) -> dict:
     message = str(outreach.get("message") or "")
+    normalized_message = re.sub(r"\s+", " ", message.lower()).strip()
     title = str(product.get("title") or "").strip()
     concept = str(video_brief.get("concept") or "")
     title_terms = set(_concept_terms(title))
@@ -1174,11 +1287,37 @@ def validate_outreach_personalization(outreach: dict, facts: dict, product: dict
         for field in ("title", "description", "type")
     ))
     unsupported = contains_unsupported_claims(message)
+    holiday_delivery_claim = re.search(
+        r"(?:deliver|delivery|arrive|arrival|receive|by)\b.{0,35}\b(christmas|holiday)|\b(christmas|holiday)\b.{0,35}\b(deliver|delivery|arrive|arrival|receive)",
+        message,
+        re.I,
+    )
+    holiday_delivery_disclaimer = re.search(
+        r"\bnot\s+(?:a\s+)?(?:promise|guarantee)\s+of\s+(?:christmas|holiday)\s+delivery\b",
+        message,
+        re.I,
+    )
+    if _expected_shipping_detail(product) and holiday_delivery_claim and not holiday_delivery_disclaimer:
+        unsupported.append("unsupported holiday delivery timing")
     generic_intro = any(phrase in message.lower() for phrase in (
         "i make short product videos for shopify stores",
         "i make short videos for shopify brands",
+        "i create short, product-specific videos that show",
     ))
-    enough_specificity = has_anchor and has_concept and extracted and not generic_intro
+    banned_copy = any(phrase in normalized_message for phrase in (
+        "its page says", "that gave me an idea", "premium product showcase",
+        "real-world product showcase", "would a short storyboard be useful",
+    )) or bool(re.search(r"\bi saw .{1,100} on your site\b", normalized_message))
+    description_words = re.findall(r"[a-z0-9]+", str(product.get("description") or "").lower())
+    message_words = re.findall(r"[a-z0-9]+", normalized_message)
+    copied_description = any(
+        " ".join(description_words[index:index + 7]) in " ".join(message_words)
+        for index in range(max(0, len(description_words) - 6))
+    ) if len(description_words) >= 7 else False
+    enough_specificity = (
+        has_anchor and has_concept and extracted and not generic_intro
+        and not banned_copy and not copied_description
+    )
     reasons = []
     if not has_anchor:
         reasons.append("message does not mention the selected product")
@@ -1186,16 +1325,30 @@ def validate_outreach_personalization(outreach: dict, facts: dict, product: dict
         reasons.append("message does not explain the selected concept")
     if generic_intro:
         reasons.append("message relies on a generic service introduction")
+    if banned_copy:
+        reasons.append("message uses a banned stock phrase or opening")
+    if copied_description:
+        reasons.append("message copies a long phrase from the product description")
     if unsupported:
         reasons.append("message contains unsupported or performance claims")
-    if len(message.split()) > 115:
+    word_count = len(message.split())
+    if word_count < 40:
+        reasons.append("message is too short to explain the specific concept")
+    if word_count > 95:
         reasons.append("message is too long")
+    missing_question = "?" not in message
+    if missing_question:
+        reasons.append("message is missing a low-pressure question")
+    manual_review_required = (
+        not enough_specificity or bool(unsupported) or word_count < 40
+        or word_count > 95 or missing_question
+    )
     return {
         "meaningful_observation_or_idea": has_anchor and has_concept,
         "explains_product_relevance": has_concept,
         "based_on_extracted_information": extracted,
         "personalization_verified": enough_specificity and not unsupported,
-        "manual_review_required": not enough_specificity or bool(unsupported),
+        "manual_review_required": manual_review_required,
         "review_reasons": reasons,
     }
 
@@ -1210,39 +1363,68 @@ def generate_outreach_message(facts: dict, store_profile: dict, diagnosis: dict,
         return {"subject": "", "message": ""}
 
     brand = store_profile.get("brand_name") or facts.get("store_name") or ""
-    description = re.sub(r"\s+", " ", str(product.get("description") or "")).strip()
-    product_type = str(product.get("type") or "").strip()
-    if description:
-        detail = re.split(r"(?<=[.!?])\s+", description)[0].rstrip(".")
-        words = detail.split()
-        if len(words) > 22:
-            detail = " ".join(words[:22]).rstrip(" ,;:") + "..."
-        lead = f"I saw {title} on your site. Its page says, “{detail}.”"
-    elif re.search(r"\b(hat|cap|shirt|hoodie|jacket|dress|bag|backpack|shoe|sneaker)\b", title, re.I):
-        lead = f"I saw {title} on your site and had a styling idea."
-    elif product_type:
-        lead = f"I saw {title} in your {product_type} range."
+    category = diagnosis.get("opportunity_category") or ""
+    shipping_detail = _expected_shipping_detail(product)
+    season = video_brief.get("seasonal_context") or ""
+    sample_reference = _sample_video_reference(facts, product)
+    if category == "collectible_reveal":
+        if shipping_detail:
+            date_phrase = re.sub(r"^(?:expected(?:\s+to)?\s+ship|expected\s+shipping(?:\s+date)?|shipping\s+expected|ships?\s+(?:on|by|around))\s+", "", shipping_detail, flags=re.I)
+            opening = f"With {title} expected to ship on {date_phrase}, there is a natural pre-order reveal moment."
+            opening += " I pictured a 20-second clip that holds on the pack, then reveals the cards one by one."
+            if season.lower() == "christmas":
+                opening += " The date could appear as an estimate in the end frame, not a promise of Christmas delivery."
+            else:
+                opening += " The date could appear as an estimate in the end frame, not a delivery guarantee."
+        else:
+            opening = f"{title} has a reveal moment built into the format. I pictured a 20-second clip that holds on the pack, then reveals the cards one by one."
+        cta_default = "Would you be open to seeing that reveal idea?"
+    elif category == "food_drink_ritual":
+        flavor = next((term for term in ("caramel", "vanilla", "hazelnut", "mocha", "cinnamon") if term in f"{title} {product.get('description', '')}".lower()), "")
+        if season:
+            opening = f"For {season}, I pictured a quiet coffee break around {title}: the first pour, a close-up of the cup, then the package beside it. The {flavor or 'drink'} could appear as a small title, keeping the scene with the brewing ritual."
+        else:
+            opening = f"For {title}, I pictured the first pour, a close shot of the cup, then the package beside it."
+            if flavor:
+                opening += f" The named {flavor} flavor could appear as a simple text cue."
+        cta_default = "Want me to send you the concept?"
+    elif category == "visual_transformation":
+        opening = f"{title} suggests a clear before-and-after: start on an ordinary bedroom ceiling, switch the projector on, then let the stars fill the frame."
+        if season:
+            opening += f" A {season} gift-style reveal could frame the transition without promising anything beyond the listed projection effect."
+        cta_default = "Would a quick outline of that transition be useful?"
+    elif category == "apparel_styling":
+        opening = f"With {title}, I would start tight on the graphic, pull back to the full garment, then show it in motion with a simple outfit."
+        if season:
+            opening += f" A {season}-season styling sequence gives that look a timely setting without adding claims about the garment."
+        cta_default = "Would you be open to seeing that styling direction?"
+    elif category == "existing_video_fresh_angle":
+        visual_angle = re.sub(r"^(?:create|show|build|make)\s+(?:a|an)\s+", "", concept, flags=re.I).rstrip(". ")
+        opening = f"I had a different angle in mind for {title}: {visual_angle}. A close opening shot, then the moment of use, could make that specific direction easy to picture."
+        cta_default = "Would you be open to seeing that alternate direction?"
     else:
-        lead = f"I saw {title} in your product listing."
+        opening = f"{title} gave me a specific visual to build around: {concept}"
+        cta_default = "Would you be open to seeing how that idea could look?"
 
-    format_name = video_brief.get("format") or "short video"
-    concept_line = concept[0].lower() + concept[1:] if concept else ""
-    offer = str(settings.get("offer") or (
-        "I create short, product-specific videos that show a product's use, details, or place in everyday life"
-    )).strip().rstrip(".!? ")
-    video_offer_line = str(settings.get("video_line") or (
-        "I can sketch out a short concept around it."
-    )).strip()
     cta = str(settings.get("cta") or "").strip()
-    if not cta or cta.lower() == "want me to send it over?":
-        cta = "Would a short storyboard be useful?"
+    if cta.lower() in {"", "auto", "would a short storyboard be useful?", "want me to send it over?"}:
+        cta = "Would you like to see the sample?" if sample_reference else cta_default
     elif not cta.endswith(("?", ".", "!")):
         cta += "?"
-    message = (
-        f"Hi {brand + ' team' if brand else 'there'},\n\n"
-        f"{lead} That gave me an idea for a {format_name}: I’d {concept_line}\n\n"
-        f"{offer}. {video_offer_line} {cta}"
-    )
+    message = f"Hi {brand + ' team' if brand else 'there'},\n\n{opening}"
+    offer = str(settings.get("offer") or "").strip()
+    if offer and offer.lower().rstrip(".!? ") != "i make short product videos":
+        message += f"\n\n{offer.rstrip('.!? ')}."
+    video_offer_line = str(settings.get("video_line") or "").strip()
+    if video_offer_line and video_offer_line.lower() not in {
+        "i can sketch out a short concept around it.",
+        "i can turn this idea into a short storyboard for you to review.",
+        "i already put together a short video for one of your products",
+    }:
+        message += f"\n\n{video_offer_line}"
+    if sample_reference:
+        message += f"\n\nI made a sample for this direction: {sample_reference}"
+    message += f"\n\n{cta}"
     sender = str(settings.get("sender_name") or "").strip()
     company = str(settings.get("sender_company") or "").strip()
     if sender:
@@ -1250,22 +1432,28 @@ def generate_outreach_message(facts: dict, store_profile: dict, diagnosis: dict,
     optout = str(settings.get("optout_line") or "").strip()
     if settings.get("optout", False) and optout:
         message += f"\n\n{optout}"
-    subject_idea = str(settings.get("subject_hint") or "a short video idea for {product}").strip()
+    subject_idea = str(settings.get("subject_hint") or "a video idea for {product}").strip()
     subject = subject_idea.replace("{product}", title).strip()
     if not subject:
         subject = f"a short video idea for {title}"
     return {"subject": subject, "message": message}
 
 
-INTELLIGENCE_SYSTEM_PROMPT = """You write concise, warm, natural outreach about a specific short-video concept for an ecommerce product.
-Use only the supplied extracted facts, evidence, diagnosis and concept. Lead with a real product observation, then explain one relevant video idea in plain English and how it makes an extracted feature, use case, audience or benefit easier to picture. Use the supplied service description, video-offer line, tone, subject idea and CTA naturally. Do not claim a storyboard or video already exists unless supplied facts explicitly confirm that. Do not make claims about competitor weakness, customer behavior, trust, conversion, sales or performance. Never invent product features, results, testimonials or certifications. Do not merely repeat the product name or use a generic service introduction. If the evidence does not support an individualized message, return an empty message and require manual review. Keep it concise and conversational. Return JSON only with subject and message."""
+INTELLIGENCE_SYSTEM_PROMPT = """You are an independent creative freelancer writing a first email to a store owner.
+Use the supplied product observation and concrete video concept as creative direction, not as a fixed email template. Write a natural, friendly note of about 45-80 words. Vary the opening and sentence rhythm for meaningful product differences. Never open with 'I saw this on your site' or 'its page says'. Do not quote or repeat a product description. Keep factual observations distinct from proposed scenes. A proposed scene is not a claim that it already exists. Do not imply that you visually inspected an image: image URLs are references only. Use only verified features, materials, dates and benefits. For expected shipping dates, never imply guaranteed holiday arrival. Don't invent customer reactions, sales, popularity, specifications or outcomes. Avoid generic service introductions, formulaic transitions, empty praise, em dashes, corporate jargon and pressure. Use a low-pressure, product-appropriate question. Don't claim a video or storyboard already exists unless the supplied facts explicitly say a sample exists. If the concept is too weak to personalize, return an empty message. Return JSON only with subject and message."""
 
 
 def build_intelligent_outreach_prompt(facts: dict, profile: dict, diagnosis: dict, selection: dict, brief: dict, settings: dict) -> str:
     product = next((p for p in (facts.get("products") or []) if p.get("title") == selection.get("product_name")), {})
+    product_for_prompt = dict(product)
+    product_for_prompt.pop("image_urls", None)
+    product_for_prompt["image_reference_available"] = bool(product.get("image_urls") or product.get("image"))
     return json.dumps({
         "store_profile": profile,
-        "selected_product": product,
+        "selected_product": product_for_prompt,
+        "image_analysis_note": "Product images are not visually analyzed. Do not infer appearance from image URLs or the image-reference flag.",
+        "sample_video_reference": _sample_video_reference(facts, product),
+        "sample_video_guidance": "If a sample-video reference is present, invite the owner to view that actual sample. Otherwise do not claim a sample exists.",
         "product_selection": selection,
         "diagnosis": diagnosis,
         "video_concept": brief,
@@ -1277,7 +1465,7 @@ def build_intelligent_outreach_prompt(facts: dict, profile: dict, diagnosis: dic
         "tone": settings.get("tone", ""),
         "subject_idea": settings.get("subject_hint", ""),
         "cta": settings.get("cta", ""),
-        "message_guidance": "Open with the evidence-backed observation, connect it to one video concept, then explain the potential communication value without promising business results.",
+        "message_guidance": "Write around the supplied product-specific creative concept in 45-80 words. Do not copy the description, repeat a stock service pitch, or force a fixed opening/structure. Distinguish facts from proposed scenes.",
         "subject_guidance": "Follow the supplied subject idea and replace {product} with the exact selected product title.",
     }, ensure_ascii=True)
 
@@ -1329,9 +1517,12 @@ def compose_store_intelligence(facts: dict, settings: dict | None = None) -> dic
     f = facts or {}
     settings = settings or {}
     profile = build_store_profile(f)
-    selection = pick_primary_product(f, profile, {})
+    selection = pick_primary_product(f, profile, {}, settings)
     selected_product = next((p for p in (f.get("products") or []) if p.get("title") == selection.get("product_name")), {})
     diagnosis = diagnose_video_opportunity(f, profile, selected_product if selected_product else None)
+    seasonal_context = seasonal_context_for(settings)
+    diagnosis["seasonal_context"] = seasonal_context
+    diagnosis["seasonal_direction"] = _seasonal_direction(seasonal_context, diagnosis, selected_product)
     video_brief = build_video_brief(f, profile, diagnosis, selected_product, settings)
     outreach = generate_outreach_message(f, profile, diagnosis, selected_product, settings, video_brief)
     outreach_quality = validate_outreach_personalization(outreach, f, selected_product, video_brief)

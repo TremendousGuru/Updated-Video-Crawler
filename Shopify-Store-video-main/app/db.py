@@ -19,7 +19,7 @@ DEFAULTS: dict[str, Any] = {
     "sender_name": "",
     "sender_company": "",
     "sender_email": "",
-    "offer": "I create short, product-specific videos that show a product's use, details, or place in everyday life.",
+    "offer": "",
     "tone": "Warm, concise, specific, and conversational. Avoid pressure, jargon, and sales promises.",
     "subject_style": "mix",
     "optout": True,
@@ -36,14 +36,17 @@ DEFAULTS: dict[str, Any] = {
     "respect_robots": True,
     "find_missing_emails": True,
     "subject_hint": "a short video idea for {product}",
-    "video_line": "I can sketch out a short concept around it.",
-    "cta": "Would a short storyboard be useful?",
+    "video_line": "",
+    "cta": "auto",
+    "seasonal_context": "auto",
+    "min_product_score": 5,
 }
 
 LEGACY_DEFAULTS: dict[str, tuple[Any, ...]] = {
     "offer": (
         "I make short product videos for Shopify stores",
         "I create short, product-specific videos that show a product's use, details, or place in everyday life.",
+        "I make short product videos.",
     ),
     "tone": (
         "friendly, direct, no fluff, sounds like a real person",
@@ -56,10 +59,13 @@ LEGACY_DEFAULTS: dict[str, tuple[Any, ...]] = {
     "video_line": (
         "I already put together a short video for one of your products",
         "I can turn this idea into a short storyboard for you to review.",
+        "I can sketch out a short concept around it.",
+        "",
     ),
     "cta": (
         "Want me to send it over?",
         "Would you be open to seeing a short storyboard for this idea?",
+        "Would a short storyboard be useful?",
     ),
 }
 

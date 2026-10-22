@@ -9,6 +9,7 @@
 <body>
   <div class="grain"></div>
 
+<<<<<<< HEAD
   <div class="browser-shell">
     <header class="topbar">
       <div class="nav-mini">
@@ -126,15 +127,206 @@ team@allbirds.com | allbirds.com"></textarea>
               </table>
             </div>
           </section>
+=======
+<div class="app-shell">
+  <aside class="sidebar">
+    <a class="rail-brand" href="#top" aria-label="Outreach Studio home"><span class="dot"></span></a>
+    <nav class="rail-nav" aria-label="Main navigation">
+      <button class="rail-link" id="navUpload" title="Upload" aria-label="Upload"><span>↑</span><small>Upload</small></button>
+      <button class="rail-link active" title="Leads &amp; Crawl" aria-label="Leads and Crawl"><span>▤</span><small>Leads &amp;<br>Crawl</small></button>
+      <a class="rail-link" href="/api/export.csv?scope=ready" title="Export" aria-label="Export"><span>↥</span><small>Export</small></a>
+      <button class="rail-link" title="Analytics" aria-label="Analytics"><span>⌁</span><small>Analytics</small></button>
+      <button class="rail-link" id="btnSettings" title="Settings" aria-label="Settings"><span>⚙</span><small>Settings</small></button>
+    </nav>
+    <div class="rail-bottom">
+      <a class="rail-link" href="/api/export.json?scope=ready" title="Export data" aria-label="Export data"><span>↗</span><small>Analytics</small></a>
+      <button class="rail-link" id="navAddStores" title="Add stores" aria-label="Add stores"><span>＋</span><small>Add Stores</small></button>
+    </div>
+  </aside>
+
+  <div class="app-main" id="top">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark"><span class="dot"></span></span><h1>Outreach Studio</h1></div>
+      <div class="topbar-actions">
+        <span class="metric"><b id="countAll">0</b> Stores</span>
+        <span class="metric metric-ready"><b id="countReady">0</b> Ready</span>
+        <span class="metric metric-sent"><b id="countSent">0</b> Sent</span>
+        <span class="metric metric-failed"><b id="countFailed">0</b> Failed</span>
+        <button class="top-icon" id="btnTopSettings" title="Settings" aria-label="Settings">⚙</button>
+        <span id="keyBadge" class="badge badge-muted">checking…</span>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <div class="breadcrumb"><span>Upload</span><i>→</i><span>Crawl</span><i>→</i><span>Review Drafts</span><i>→</i><span>Send</span></div>
+      <div class="workspace-grid">
+        <section class="panel leads-panel" id="panelLeads">
+          <div class="panel-head leads-head">
+            <div><h2>Leads</h2><div class="list-controls">
+              <label>Show:<select id="filterShow" class="select"><option value="all">All leads</option><option value="ready" selected>Ready</option><option value="failed">Failed</option><option value="pending">Queued</option><option value="sent">Sent</option></select></label>
+              <label>Crawl:<select id="scopeSelect" class="select"><option value="new">Queued, manual-review and failed</option><option value="failed">Only failed</option><option value="all">All stores</option></select></label>
+            </div></div>
+          </div>
+          <div class="lead-actions">
+            <button class="btn btn-primary" id="btnCrawl">Crawl &amp; compose</button>
+            <button class="btn btn-danger btn-sm hidden" id="btnCancel">Stop</button>
+            <button class="iconbtn" id="btnExport" title="Export ready leads" aria-label="Export ready leads">⇩</button>
+            <button class="iconbtn" id="btnSearch" title="Search leads" aria-label="Search leads">⌕</button>
+            <button class="iconbtn" id="btnCrawlSelected" title="Crawl selected" aria-label="Crawl selected">⠿</button>
+          </div>
+          <input class="search-input hidden" id="leadSearch" type="search" placeholder="Search store, domain, or email">
+          <div id="progressWrap" class="progress-wrap hidden"><div class="progress"><div class="progress-bar" id="progressBar"></div></div><div class="progress-meta" id="progressMeta"></div></div>
+          <div class="table-scroll">
+            <table class="leads">
+              <thead><tr><th class="c-chk"><input type="checkbox" id="checkAll" aria-label="Select all leads"></th><th>Store</th><th>Domain</th><th>Email</th><th>Status</th></tr></thead>
+              <tbody id="leadRows"><tr class="empty"><td colspan="5">No rows yet. Add a list below.</td></tr></tbody>
+            </table>
+          </div>
+          <div class="list-footer"><span id="selCount">0 selected</span><button class="text-button danger-text" id="btnClear">Delete all leads</button></div>
+
+          <details class="upload-disclosure" id="panelUpload">
+            <summary><span>＋</span> Upload CSV</summary>
+            <div class="upload-content">
+              <label class="dropzone" id="dropzone"><input type="file" id="fileInput" multiple accept=".csv,.txt,.xlsx,.xlsm,.tsv,.xls"><span class="dz-title">Drop CSV, Excel or TXT here</span><span class="dz-sub">or click to browse</span></label>
+              <textarea id="pasteInput" placeholder="Paste store rows, one per line"></textarea>
+              <div class="upload-buttons"><button class="btn btn-primary btn-sm" id="btnPaste">Add pasted rows</button><button class="btn btn-ghost btn-sm" id="btnSample">Load examples</button><a class="btn btn-ghost btn-sm" href="/api/template.csv">CSV template</a></div>
+              <div id="uploadReport" class="report"></div>
+            </div>
+          </details>
+        </section>
+
+        <section class="panel review-panel" aria-label="Selected lead draft">
+          <div class="review-heading">
+            <div><h2 id="dStore">Select a lead</h2><p id="dEmail" class="muted">Choose a row to review its draft</p></div>
+            <span id="draftStatus" class="status-chip">Review</span>
+          </div>
+          <div class="draft-notice hidden" id="draftNotice"></div>
+          <div class="field subject-field"><label for="dSubject">Subject</label><input type="text" id="dSubject" placeholder="Subject line"></div>
+          <div class="draft-toolbar"><label for="dSubject">Edit subject</label><div class="draft-actions"><button class="btn btn-ghost btn-sm" id="btnSaveDraft">Save</button><button class="btn btn-ghost btn-sm" id="btnRegen">AI Rewrite</button><button class="btn btn-ghost btn-sm" id="btnRecrawl">Recrawl</button></div></div>
+          <textarea id="dBody" class="draft-body" placeholder="Your personalized draft will appear here." rows="18"></textarea>
+          <div class="draft-meta"><span id="dCount"></span><span id="dEngine"></span></div>
+          <div class="send-row"><button class="btn btn-ghost" id="btnSendGmail">↗ Open draft in Gmail</button><button class="btn btn-primary" id="btnMarkSent">2. Sent &amp; Next</button></div>
+          <button class="btn hidden" id="btnSendMail">Open in email app</button><button class="btn hidden" id="btnCopy">Copy</button>
+          <p class="hint" id="dShot"></p>
+          <details class="review-accordion"><summary>What we found</summary><div class="accordion-content"><div id="dFacts" class="facts"></div></div></details>
+          <details class="review-accordion"><summary>Store intelligence</summary><div class="accordion-content"><p class="hint">Crawl notes and evidence-backed store details are shown above.</p><p id="dFlags" class="hint"></p></div></details>
+          <details class="review-accordion"><summary>Sources</summary><div class="accordion-content"><ul id="dPages" class="pages"></ul></div></details>
+        </section>
+      </div>
+      <footer class="foot">Nothing is sent automatically. You always confirm the send yourself.</footer>
+    </main>
+  </div>
+</div>
+
+<!-- ------------------------------------------------------------- settings -->
+<div class="modal hidden" id="settingsModal">
+  <div class="modal-card">
+    <div class="modal-head">
+      <h3>Settings</h3>
+      <button class="x" data-close>&times;</button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>AI writing</label>
+        <div class="row">
+          <label class="chk"><input type="checkbox" id="s_use_ai"> Use an AI model when a key is available</label>
+>>>>>>> 365eac7 (Improve product-specific outreach generation)
         </div>
 
+<<<<<<< HEAD
         <footer class="foot">
           <span>Runs entirely on your machine. Nothing is sent automatically — you always press send yourself.</span>
         </footer>
       </main>
+=======
+      <div class="grid2">
+        <div class="field">
+          <label>API key <span class="muted">(OpenAI, OpenRouter, Groq, Gemini-compat…)</span></label>
+          <div class="row">
+            <input type="password" id="s_api_key" placeholder="sk-… leave blank to keep unchanged">
+            <button class="btn btn-ghost btn-sm" id="btnTestKey">Test</button>
+            <button class="btn btn-ghost btn-sm danger-text" id="btnForgetKey" title="Delete the stored key">Forget</button>
+          </div>
+          <div id="keyTest" class="hint"></div>
+        </div>
+        <div class="field">
+          <label>Base URL</label>
+          <input type="text" id="s_base_url" placeholder="https://api.openai.com/v1">
+        </div>
+        <div class="field">
+          <label>Model</label>
+          <input type="text" id="s_model" placeholder="gpt-4o-mini">
+        </div>
+        <div class="field">
+          <label>Extra context (optional)</label>
+          <input type="text" id="s_extra" placeholder="Anything else to tell the writer?">
+        </div>
+      </div>
+
+      <hr>
+      <h4>Your message</h4>
+      <div class="grid2">
+        <div class="field"><label>Your name</label><input type="text" id="s_sender_name" placeholder="Alex"></div>
+        <div class="field"><label>Company / handle (optional)</label><input type="text" id="s_sender_company" placeholder="Studio Nine"></div>
+      </div>
+      <div class="field">
+        <label>Optional service detail</label>
+        <input type="text" id="s_offer" placeholder="Only included when you customize this field">
+      </div>
+      <div class="field">
+        <label>Optional video line</label>
+        <input type="text" id="s_video_line" placeholder="Leave blank for product-led copy">
+      </div>
+      <div class="field">
+        <label>Call to action</label>
+        <input type="text" id="s_cta" placeholder="Auto selects a product-specific question">
+      </div>
+      <div class="grid2">
+        <div class="field"><label>Subject 1 idea (lowercase, blunt)</label><input type="text" id="s_subject_hint"></div>
+        <div class="field"><label>Tone</label><input type="text" id="s_tone"></div>
+      </div>
+      <div class="grid2">
+        <div class="field">
+          <label>Seasonal context</label>
+          <select id="s_seasonal_context">
+            <option value="auto">Automatic (in season)</option>
+            <option value="Christmas">Christmas</option>
+            <option value="off">Off</option>
+          </select>
+          <p class="hint">Seasonal wording is used only when it fits the product concept.</p>
+        </div>
+        <div class="field">
+          <label>Minimum product evidence score</label>
+          <input type="number" id="s_min_product_score" min="0" max="10" step="1">
+          <p class="hint">Candidates below this score are skipped for manual review.</p>
+        </div>
+      </div>
+      <div class="field">
+        <label class="chk"><input type="checkbox" id="s_optout"> Add an opt-out line at the end</label>
+        <input type="text" id="s_optout_line" style="margin-top:8px">
+      </div>
+
+      <hr>
+      <h4>Crawler</h4>
+      <div class="grid3">
+        <div class="field"><label>Stores at once</label><input type="number" id="s_concurrency" min="1" max="10"></div>
+        <div class="field"><label>Delay between requests (s)</label><input type="number" id="s_request_delay" step="0.1" min="0" max="10"></div>
+        <div class="field"><label>Max pages per store</label><input type="number" id="s_max_pages" min="2" max="12"></div>
+      </div>
+      <div class="field">
+        <label class="chk"><input type="checkbox" id="s_respect_robots"> Respect robots.txt</label>
+        <label class="chk"><input type="checkbox" id="s_find_missing_emails"> Hunt for a contact email when the row has none</label>
+        <label class="chk"><input type="checkbox" id="s_auto_compose"> Write the message right after crawling (uncheck to review sites first)</label>
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancel</button>
+      <button class="btn btn-primary" id="btnSaveSettings">Save settings</button>
+>>>>>>> 365eac7 (Improve product-specific outreach generation)
     </div>
   </div>
 
+<<<<<<< HEAD
   <div class="modal hidden" id="settingsModal">
     <div class="modal-card">
       <div class="modal-head">
@@ -282,5 +474,9 @@ team@allbirds.com | allbirds.com"></textarea>
 
   <div id="toast" class="toast hidden"></div>
   <script src="/static/app.js"></script>
+=======
+<div id="toast" class="toast hidden"></div>
+<script src="/static/app.js"></script>
+>>>>>>> 365eac7 (Improve product-specific outreach generation)
 </body>
 </html>
